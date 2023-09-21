@@ -1,0 +1,289 @@
+---
+title: "deriving timing & tempo"
+author: "cfm & amalia & sjc"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    highlight: tango
+    theme: united
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+---
+
+### Setting up markdown {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+
+options(scipen=999)
+```
+
+### loading required packages
+
+```{r Load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
+# load packages
+library(pacman)
+pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, install = TRUE)
+```
+
+### setting root path
+
+```{r root path}
+
+cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
+proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
+q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
+
+```
+
+### loading in data from CAS 
+
+```{r loading in data}
+
+## for puberty self-report variables 
+
+puberty_sr <- read.csv(paste0(q_path, "Puberty/Allwaves_PubertyComposite_updated.csv")) %>%
+  mutate(tagid=as.factor(tagid),
+         wave=as.factor(wave)) %>%
+  select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
+
+age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>% 
+  mutate(tagid = as.factor(tagid),
+         wave = as.factor(wave)) %>% 
+  select(tagid, wave, age_menarche)
+
+```
+
+### extracting and visualizing puberty from PUBcomp and hormones
+
+```{r extracting puberty variables}
+
+## IDs missing PUBcomp: TAG014 W1, TAG057 W1, TAG114 W1, TAG116 W3, TAG130 W1, TAG141 W1
+
+## filtering puberty doc 
+
+puberty_sr <- puberty_sr %>% 
+  filter(!is.na(age),
+         !is.na(PUBcomp))
+
+## centering age by sample set mean
+
+samplemean = mean(puberty_sr$age)
+puberty_sr$age_centered <- (puberty_sr$age - samplemean)
+
+### SELF REPORT 
+
+## log model for timing from PUBcomp 
+
+b0 = 1
+b1 = 5
+
+# Nonlinear mixed effects model equation
+model_equation <- function(b0, b1, alpha, lambda, age_centered) {
+  b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age_centered - lambda))))
+}
+
+# Model
+sr_model <- nlme::nlme(
+  PUBcomp ~ model_equation(b0, b1, alpha, lambda, age_centered),
+  fixed = b0 + b1 + alpha + lambda ~ 1,
+  data = puberty_sr,
+  random = list(alpha ~ 1, lambda ~ 1),
+  start = c(b0 = 1, b1 = 5, alpha = 0.9, lambda = 13.5),
+  control = nlme::nlmeControl(opt = "nlminb")
+)
+
+# Output of individual-level estimates
+individual_estimates <- summary(sr_model)
+
+# Output of individual-level predicted scores
+predicted_scores <- predict(sr_model)
+
+# Output of model fit statistics
+fit_statistics <- summary(sr_model)$tTable
+
+# Output of parameter estimates
+parameter_estimates <- fixef(sr_model)
+
+```
+
+```{r hormones}
+
+### HORMONES 
+
+## creating quadratic age variable 
+
+puberty_sr$age_squared <- (puberty_sr$age_centered * puberty_sr$age_centered)
+
+## creating latent hormone variable 
+
+horm_var <- '
+
+# Latent Saliva Variables
+dhea =~ dhea1 + dhea2 + dhea3 + dhea4
+estr =~ estr1 + estr2 + estr3 + estr4
+test =~ test1 + test2 + test3 + test4
+
+# Latent Neuroendocrine Systems
+horm =~ dhea + test + est
+
+'
+
+horm_var_fit <- sem(horm_var, data = puberty_sr)
+horm <- predict(horm_var_fit, newdata = puberty_sr, type = "lv", se = FALSE)
+
+
+horm_lin <- lmer(horm ~ age_centered + (1 + age_centered || tagid), data = puberty_sr  %>% 
+                   filter(!is.na(age_centered),
+                          !is.na(age_squared),
+                          !is.na(horm)), REML=FALSE)
+
+horm_quad <- lmer(horm ~ age_centered + age_squared (1 + age_centered + age_squared || tagid), data = puberty_sr  %>% 
+                   filter(!is.na(age_centered),
+                          !is.na(age_squared),
+                          !is.na(horm)), REML=FALSE)
+
+## looking at results 
+
+summary(horm_lin)
+summary(horm_quad)
+
+## model comparison of effects
+
+anova(horm_lin, horm_quad)
+
+## extracting random effects from best fitting model 
+
+horm_resid <- ranef(horm_puberty_quad)$tagid
+horm_resid <- cbind(tagid = as.factor(rownames(horm_resid)), horm_resid)
+
+```
+
+```{r plotting timing + tempo}
+
+## PLOT 
+
+## age by puberty 
+
+sr_puberty_quad_plot <- ggplot(data = puberty_sr,
+                               aes(x = PUBcomp,
+                                   y = age_centered+samplemean,
+                                   col = tagid, 
+                                   group = tagid)) +
+  geom_point(size = 1.2,
+             alpha = .8, 
+             position = "jitter") +
+  theme_minimal()+
+  theme(legend.position="none") +
+  geom_smooth(method = lm, 
+              se = FALSE,
+              size= .5,
+              alpha = .8) + 
+  labs(title = "Age by Self-Report Pubertal Stage",
+       subtitle = "Each ID's slope is indicated by a regression line")
+
+print(sr_puberty_quad_plot)
+
+## residual checks 
+
+plot(fitted(sr_puberty_quad), resid(sr_puberty_quad, type = "pearson"))
+
+qqnorm(resid(sr_puberty_quad))
+
+qqnorm(ranef(sr_puberty_quad)$tagid[,1])
+
+## cleaning tagid for puberty doc so that puberty doc and cortical doc will have same subjects 
+
+puberty_sr_tagid <- puberty_sr %>% 
+  mutate(tagid = as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = "")),
+         wave = as.factor(paste(formatC(wave, width=2, flag="0"))))
+
+## fix tagid for puberty and random effects data frames for smoother combining of data frames
+
+sr_eff_quad_tagid <- sr_eff_quad %>% 
+  mutate(tagid=as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = ""))) %>%
+  mutate(timing =`(Intercept)`,
+         tempo = age_centered)%>%
+  select(1,4,5)
+
+## cleaning environment 
+
+rm(sr_eff_quad, puberty_sr, sr_puberty_linear, sr_puberty_quad, sr_puberty_quad_plot)
+
+## MORE PLOTS (for poster + manuscript)
+
+## timing and tempo 
+
+timing_tempo <- ggplot(sr_eff_quad_tagid, 
+                       aes(x = timing,
+                           y = tempo))+
+  geom_smooth(method = "lm", se = FALSE, colour = "#663333", size = 1.2) +
+  geom_point(colour = "#CC99CC", alpha = 1, size = 2) +
+  ggtitle("Extracted Timing and Tempo")+
+  xlab("Timing") +
+  ylab("Tempo")+
+  theme_minimal(base_size = 26)+
+  theme(legend.position = "none",
+        text = element_text(family = "Tahoma", color = "#330000"))
+
+# ggsave(timing_tempo, filename = paste0(proj_path, "script_output/timing_tempo.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
+
+
+puberty_plot <- ggplot(puberty_sr_tagid,
+                       aes(x = age_centered+samplemean,
+                           y = PUBcomp, 
+                           group = tagid, 
+                           col = tagid)) +
+  geom_point(alpha=1) +
+  geom_line(alpha=.4) +
+  ggtitle("Puberty Progression Modeled by Age")+
+  theme(legend.position = "none") +
+  xlab("Age (years)") +
+  ylab("Tanner Stage")+
+  theme_minimal(base_size = 26)+
+  theme(legend.position = "none",
+        text = element_text(family = "Tahoma", color = "#330000"))
+  
+
+puberty_plot
+
+# ggsave(puberty_plot, filename = paste0(proj_path, "script_output/puberty_by_age.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
+
+puberty_plot_grade <- ggplot(puberty_sr_tagid,
+                       aes(x = grade,
+                           y = PUBcomp, 
+                           group = tagid, 
+                           col = tagid)) +
+  geom_point(alpha=1) +
+  geom_line(alpha=.4) +
+  ggtitle("Puberty Progression Modeled by Grade in School")+
+  theme(legend.position = "none") +
+  xlab("Grade in School") +
+  ylab("Tanner Stage")+
+  theme_minimal(base_size = 26)+
+  theme(legend.position = "none",
+        text = element_text(family = "Tahoma", color = "#330000"))
+
+# ggsave(puberty_plot_grade, filename = paste0(proj_path, "script_output/puberty_by_grade.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
+
+## correlation between age and grade 
+
+#cor.test(puberty_sr_tagid$age, puberty_sr_tagid$grade)
+# super correlated = 0.9573725
+
+## cleaning environment 
+
+rm(puberty_plot, timing_tempo)
+
+```
+
