@@ -63,10 +63,9 @@ age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>%
   select(tagid, wave, age_menarche)
 
 ```
+### make df
 
-### extracting and visualizing puberty from PUBcomp and hormones
-
-```{r extracting puberty variables}
+```{r making df}
 
 ## IDs missing PUBcomp: TAG014 W1, TAG057 W1, TAG114 W1, TAG116 W3, TAG130 W1, TAG141 W1
 
@@ -74,46 +73,38 @@ age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>%
 
 puberty_sr <- puberty_sr %>% 
   filter(!is.na(age),
-         !is.na(PUBcomp))
+         !is.na(stage))
+
+df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
+
+df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
+
+df <- df %>%
+  group_by(tagid) %>%
+  mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
+  ungroup() %>% 
+  mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
 
 ## centering age by sample set mean
 
-samplemean = mean(puberty_sr$age)
-puberty_sr$age_centered <- (puberty_sr$age - samplemean)
+df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
+
+```
+
+### extracting and visualizing puberty from PUBcomp and hormones
+
+```{r extracting puberty variables}
 
 ### SELF REPORT 
-
-## log model for timing from PUBcomp 
-
 b0 = 1
 b1 = 5
 
-# Nonlinear mixed effects model equation
-model_equation <- function(b0, b1, alpha, lambda, age_centered) {
-  b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age_centered - lambda))))
-}
+logistic_growth_model <- nls(stage ~ b0 + (b1 - b0) / (1 + exp(-alpha * (age - lambda))),
+                             data = df,
+                             start = list(alpha = 0.9, lambda = 13.5))
 
-# Model
-sr_model <- nlme::nlme(
-  PUBcomp ~ model_equation(b0, b1, alpha, lambda, age_centered),
-  fixed = b0 + b1 + alpha + lambda ~ 1,
-  data = puberty_sr,
-  random = list(alpha ~ 1, lambda ~ 1),
-  start = c(b0 = 1, b1 = 5, alpha = 0.9, lambda = 13.5),
-  control = nlme::nlmeControl(opt = "nlminb")
-)
+summary(logistic_growth_model)
 
-# Output of individual-level estimates
-individual_estimates <- summary(sr_model)
-
-# Output of individual-level predicted scores
-predicted_scores <- predict(sr_model)
-
-# Output of model fit statistics
-fit_statistics <- summary(sr_model)$tTable
-
-# Output of parameter estimates
-parameter_estimates <- fixef(sr_model)
 
 ```
 
