@@ -52,7 +52,7 @@ q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
 
 ## for puberty self-report variables 
 
-puberty_sr <- read.csv(paste0(q_path, "Puberty/Allwaves_PubertyComposite_updated.csv")) %>%
+puberty_sr <- read.csv("~/Desktop/Allwaves_PubertyComposite_updated.csv") %>%
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
@@ -99,12 +99,31 @@ df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
 b0 = 1
 b1 = 5
 
-logistic_growth_model <- nls(stage ~ b0 + (b1 - b0) / (1 + exp(-alpha * (age - lambda))),
+logistic_growth_model <- nlme(stage ~ b0 + (b1 - b0) / (1 + exp(-alpha * (age - lambda))),
                              data = df,
+                             random = pdDiag(alpha + lambda ~ age) | tagid,
+                             fixed = list(b0 = 1, b1 = 5),
                              start = list(alpha = 0.9, lambda = 13.5))
 
 summary(logistic_growth_model)
 
+## try in nlme again but just make b1 = 5, b0 = 1
+## create a timepoint var, just order per ID (wave is arbitrary)
+ctrl <- nlmeControl(maxIter)
+
+nlme_fit <- nlme::nlme(stage ~ 1 + (5 - 1) / (1 + exp(-alpha * (age - lambda))), 
+                  data = df,
+                  fixed = alpha + lambda ~ 1 | tagid, 
+                  random = alpha + lambda ~ 1, 
+                  start = c(alpha = 0.9, lambda = 13.5),
+                  nlmeControl(maxIter=180))
+
+### lavaan , specify model and then fit with growth function
+## https://lavaan.ugent.be/tutorial/growth.html
+
+### glmer 
+
+glmer_out <- lme4::glmer(stage ~ age + (1 |tagid), family = "binomial", data = df )
 
 ```
 
