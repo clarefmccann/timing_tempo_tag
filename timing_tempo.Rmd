@@ -99,11 +99,15 @@ df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
 b0 = 1
 b1 = 5
 
-logistic_growth_model <- nlme(stage ~ b0 + (b1 - b0) / (1 + exp(-alpha * (age - lambda))),
-                             data = df,
-                             random = pdDiag(alpha + lambda ~ age) | tagid,
-                             fixed = list(b0 = 1, b1 = 5),
-                             start = list(alpha = 0.9, lambda = 13.5))
+logistic_growth <- function(age, b0, b1, alpha, lambda) {
+  lambda / (1 + alpha * exp(-(b0 + b1 * age)))
+}
+
+fit <- nlme(logistic_growth(stage ~ lambda / (1 + alpha * exp(-(b0 + b1 * age))),
+             fixed = lambda + alpha ~ 1,
+             random = pdCompSymm(list(~ 1 | age / tagid)),
+             start = c(lambda = 100, alpha = 0.1),
+             data = df))
 
 summary(logistic_growth_model)
 
