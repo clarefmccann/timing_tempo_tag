@@ -33,7 +33,7 @@ options(scipen=999)
 ```{r Load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
 # load packages
 library(pacman)
-pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, install = TRUE)
+pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, saemix, install = TRUE)
 ```
 
 ### setting root path
@@ -52,15 +52,15 @@ q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
 
 ## for puberty self-report variables 
 
-puberty_sr <- read.csv("~/Desktop/Allwaves_PubertyComposite_updated.csv") %>%
+puberty_sr <- read.csv(paste0(q_path, "puberty/Allwaves_PubertyComposite_updated.csv")) %>%
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
 
-age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>% 
-  mutate(tagid = as.factor(tagid),
-         wave = as.factor(wave)) %>% 
-  select(tagid, wave, age_menarche)
+# age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>% 
+#   mutate(tagid = as.factor(tagid),
+#          wave = as.factor(wave)) %>% 
+#   select(tagid, wave, age_menarche)
 
 ```
 ### make df
@@ -77,57 +77,109 @@ puberty_sr <- puberty_sr %>%
 
 df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
 
-df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
+# df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
 
-df <- df %>%
-  group_by(tagid) %>%
-  mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
-  ungroup() %>% 
-  mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
-
-## centering age by sample set mean
-
-df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
+# df <- df %>%
+#   group_by(tagid) %>%
+#   mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
+#   ungroup() %>% 
+#   mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
+# 
+# ## centering age by sample set mean
+# 
+# df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
 
 ```
 
 ### extracting and visualizing puberty from PUBcomp and hormones
 
 ```{r extracting puberty variables}
+## logistic 
 
-### SELF REPORT 
-b0 = 1
-b1 = 5
-
-logistic_growth <- function(age, b0, b1, alpha, lambda) {
-  lambda / (1 + alpha * exp(-(b0 + b1 * age)))
+logistic.model <- function(psi,id,xidep) {
+t <- xidep[,1]
+TtlGrwth<-psi[id,1]
+Apprch<-psi[id,2]
+Timing<-psi[id,3]
+LwrAsy<-psi[id,4]
+ypred<- LwrAsy+TtlGrwth/(1+exp(-Apprch*(t-Timing)))
+return(ypred)
 }
 
-fit <- nlme(logistic_growth(stage ~ lambda / (1 + alpha * exp(-(b0 + b1 * age))),
-             fixed = lambda + alpha ~ 1,
-             random = pdCompSymm(list(~ 1 | age / tagid)),
-             start = c(lambda = 100, alpha = 0.1),
-             data = df))
+LogisticData.RQ1 <- saemixData(name.data = df, header = TRUE, name.group = c("tagid"),name.predictors = c( "age"),name.response = c("stage"),name.covariates = c(),name.X = "age")
 
-summary(logistic_growth_model)
+plot(LogisticData.RQ1)
 
-## try in nlme again but just make b1 = 5, b0 = 1
-## create a timepoint var, just order per ID (wave is arbitrary)
-ctrl <- nlmeControl(maxIter)
+LogisticModel.RQ1<-saemixModel(model=logistic.model, description = 'Logistic', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1), covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0),ncol = 4, byrow = TRUE),transform.par=c(0,0,0,0))
 
-nlme_fit <- nlme::nlme(stage ~ 1 + (5 - 1) / (1 + exp(-alpha * (age - lambda))), 
-                  data = df,
-                  fixed = alpha + lambda ~ 1 | tagid, 
-                  random = alpha + lambda ~ 1, 
-                  start = c(alpha = 0.9, lambda = 13.5),
-                  nlmeControl(maxIter=180))
+LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1,NLMEGM.options)
 
-### lavaan , specify model and then fit with growth function
-## https://lavaan.ugent.be/tutorial/growth.html
+## gompertz 
 
-### glmer 
+gompertz.model <- function(psi,id,x) {
+  
+t <- x[,1]
+TtlGrwth <- psi[id,1]
+Apprch <- psi[id,2]
+Timing <- psi[id,3]
+LwrAsy <- psi[id,4]
+ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
 
-glmer_out <- lme4::glmer(stage ~ age + (1 |tagid), family = "binomial", data = df )
+return(ypred)
+}
+
+NLMEGM.options <- list(seed=1234, displayProgress=FALSE)
+
+GompertzData.RQ1 <- saemixData(name.data = df, header = TRUE,
+name.group = c("tagid"), name.predictors = c("age"), name.response = c("stage"),
+name.X = "age")
+
+GompertzModel.RQ1 <- saemixModel(model=gompertz.model,
+description = 'Gompertz', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1),
+covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0), ncol = 4, byrow = TRUE),
+transform.par=c(0,0,0,0))
+
+GompertzFit.RQ1 <- saemix(GompertzModel.RQ1,GompertzData.RQ1, NLMEGM.options)
+
+                                                  
+```
+
+```{r plots & dx}
+
+# Plot of the Logistic, Gompertz, and Richards curves over the data
+L.function <- function(p.lambda1, p.lambda2, p.lambda3, p.lambda4, age){
+resp <- p.lambda1+(p.lambda4-p.lambda1)/(1+(age/p.lambda2)^p.lambda3)
+}
+G.function <- function(p.a, p.b, p.c, p.d, age){
+resp <- p.d+(p.a)*exp(-exp(-p.b*(age-p.c)))
+}
+R.function <- function(p1,p2,p3,p4,p5,age){
+resp <- p4+p1/(1+p5*exp(-p2*(age-p3))*(1/p5))
+}
+p.lambda1 = 5.023; p.lambda2 = 1.392; p.lambda3 = 2.111; p.lambda4 = -0.311;
+p.a = 5.0365; p.b = 0.9493; p.c = 1.8028; p.d = -0.0816;
+p1 = 5.04; p2 = 2.60; p3 = 1.60; p4 = -0.32; p5 = 1.87;
+age <- c(0,1,2,3,4,5)
+logistic.predicted <- L.function(p.lambda1,p.lambda2,p.lambda3,p.lambda4, age)
+
+gompertz.predicted <- G.function(p.a, p.b, p.c, p.d, age)
+
+richards.predicted <- R.function(p1, p2, p3, p4, p5, age)
+
+dfpreds <- data.frame(age=c(age,age,age),stage=c(logistic.predicted,gompertz.predicted,richards.predicted),ID=rep(1),Model=rep(c('Logistic','Gompertz','Richards'),each=6))
+
+ggplot(data = df, aes(x = age, y = stage, group = tagid)) +
+geom_line(color = "lightgray") +
+labs(x = "age") +
+geom_line(data = dfpreds, aes(x = age, y = stage, group = Model, color = Model))
+
+# Diagnostics of the Gompertz curve
+
+par(mfrow=c(2,2))
+
+plot(GompertzFit.RQ1, plot.type = "individual.fit", new = FALSE, ilist = 1:4, smooth = TRUE, ylog = TRUE, pch = 1, col = "Blue", xlab = "age", ylab = "stage")
+
+plot(GompertzFit.RQ1, plot.type = "npde")
 
 ```
 
