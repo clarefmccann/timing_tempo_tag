@@ -112,7 +112,7 @@ plot(LogisticData.RQ1)
 
 LogisticModel.RQ1<-saemixModel(model=logistic.model, description = 'Logistic', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1), covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0),ncol = 4, byrow = TRUE),transform.par=c(0,0,0,0))
 
-LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1,NLMEGM.options)
+LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1)
 
 ## gompertz 
 

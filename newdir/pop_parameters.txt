@@ -29,7 +29,7 @@ ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
 
 return(ypred)
 }
-<bytecode: 0x7fd0dfb0ea88>
+<bytecode: 0x7fc9ccca7ab0>
   Nb of parameters: 4 
       parameter names:  TtlGrwth Apprch Timing LwrAsy 
       distribution:
