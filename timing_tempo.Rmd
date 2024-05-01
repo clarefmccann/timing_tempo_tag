@@ -52,7 +52,7 @@ q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
 
 ## for puberty self-report variables 
 
-puberty_sr <- read.csv("~/Desktop/Allwaves_PubertyComposite_updated.csv") %>%
+puberty_sr <- read.csv("Allwaves_PubertyComposite_updated.csv") %>%
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
@@ -77,17 +77,17 @@ puberty_sr <- puberty_sr %>%
 
 df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
 
-df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
-
-df <- df %>%
-  group_by(tagid) %>%
-  mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
-  ungroup() %>% 
-  mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
+# df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
+# 
+# df <- df %>%
+#   group_by(tagid) %>%
+#   mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
+#   ungroup() %>% 
+#   mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
 
 ## centering age by sample set mean
 
-df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
+# df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
 
 ```
 
@@ -103,11 +103,12 @@ logistic_growth <- function(age, b0, b1, alpha, lambda) {
   lambda / (1 + alpha * exp(-(b0 + b1 * age)))
 }
 
-fit <- nlme(logistic_growth(stage ~ lambda / (1 + alpha * exp(-(b0 + b1 * age))),
-             fixed = lambda + alpha ~ 1,
-             random = pdCompSymm(list(~ 1 | age / tagid)),
-             start = c(lambda = 100, alpha = 0.1),
-             data = df))
+fit <- nlme(
+  fixed = stage ~ logistic_growth(age, b0, b1, alpha, lambda),
+  random = list(tagid = pdCompSymm(lambda + alpha ~ 1)),
+  start = c(lambda = 100, alpha = 0.1),
+  data = puberty_sr
+)
 
 summary(logistic_growth_model)
 
@@ -115,21 +116,58 @@ summary(logistic_growth_model)
 ## create a timepoint var, just order per ID (wave is arbitrary)
 ctrl <- nlmeControl(maxIter)
 
+puberty_sr <- puberty_sr %>% 
+  filter(!is.na(stage),
+         !is.na(age))
+
 nlme_fit <- nlme::nlme(stage ~ 1 + (5 - 1) / (1 + exp(-alpha * (age - lambda))), 
-                  data = df,
-                  fixed = alpha + lambda ~ 1 | tagid, 
-                  random = alpha + lambda ~ 1, 
-                  start = c(alpha = 0.9, lambda = 13.5),
-                  nlmeControl(maxIter=180))
+                        data = puberty_sr,
+                        fixed = list(alpha ~ 1, lambda ~ 1), 
+                        random = alpha + lambda ~ 1 |tagid/age, 
+                        groups = ~tagid,
+                        start = c(alpha = 0.9, lambda = 13.5),
+                        nlmeControl(maxIter = 180))
+
 
 ### lavaan , specify model and then fit with growth function
 ## https://lavaan.ugent.be/tutorial/growth.html
 
 ### glmer 
 
-glmer_out <- lme4::glmer(stage ~ age + (1 |tagid), family = "binomial", data = df )
+glmer_out <- lme4::glmer(stage ~ age + (1 | tagid), family = "gaussian", data = puberty_sr)
+summary(glmer_out)
 
 ```
+```{r trying lavaan}
+
+nonlinear_model <- '
+  # Growth curve
+    # Intercepts
+    growth ~ b0 + b1 * age + b2 * age^2
+
+    # Logistic growth curve
+    stage ~ plogis(growth)
+
+  # Random effects
+    # Specify random effects for growth
+    growth ~~ 1 * growth
+
+  # Residuals
+    # Specify residuals for stage
+    stage ~~ 1 * stage
+'
+
+
+# Fit the mixed effects model using lavaan and lme4
+fit <- lavaan::sem(nonlinear_model, data = puberty_sr)
+
+# Print the results
+summary(fit)
+
+
+```
+
+
 
 ```{r hormones}
 
