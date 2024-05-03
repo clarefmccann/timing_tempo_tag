@@ -52,11 +52,7 @@ q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
 
 ## for puberty self-report variables 
 
-<<<<<<< HEAD
-puberty_sr <- read.csv("Allwaves_PubertyComposite_updated.csv") %>%
-=======
 puberty_sr <- read.csv(paste0(q_path, "puberty/Allwaves_PubertyComposite_updated.csv")) %>%
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
@@ -82,25 +78,15 @@ puberty_sr <- puberty_sr %>%
 df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
 
 # df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
-<<<<<<< HEAD
-# 
-=======
 
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
 # df <- df %>%
 #   group_by(tagid) %>%
 #   mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
 #   ungroup() %>% 
 #   mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
-<<<<<<< HEAD
-
-## centering age by sample set mean
-
-=======
 # 
 # ## centering age by sample set mean
 # 
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
 # df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
 
 ```
@@ -120,37 +106,13 @@ ypred<- LwrAsy+TtlGrwth/(1+exp(-Apprch*(t-Timing)))
 return(ypred)
 }
 
-<<<<<<< HEAD
-fit <- nlme(
-  fixed = stage ~ logistic_growth(age, b0, b1, alpha, lambda),
-  random = list(tagid = pdCompSymm(lambda + alpha ~ 1)),
-  start = c(lambda = 100, alpha = 0.1),
-  data = puberty_sr
-)
-=======
 LogisticData.RQ1 <- saemixData(name.data = df, header = TRUE, name.group = c("tagid"),name.predictors = c( "age"),name.response = c("stage"),name.covariates = c(),name.X = "age")
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
 
 plot(LogisticData.RQ1)
 
 LogisticModel.RQ1<-saemixModel(model=logistic.model, description = 'Logistic', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1), covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0),ncol = 4, byrow = TRUE),transform.par=c(0,0,0,0))
 
-<<<<<<< HEAD
-puberty_sr <- puberty_sr %>% 
-  filter(!is.na(stage),
-         !is.na(age))
-
-nlme_fit <- nlme::nlme(stage ~ 1 + (5 - 1) / (1 + exp(-alpha * (age - lambda))), 
-                        data = puberty_sr,
-                        fixed = list(alpha ~ 1, lambda ~ 1), 
-                        random = alpha + lambda ~ 1 |tagid/age, 
-                        groups = ~tagid,
-                        start = c(alpha = 0.9, lambda = 13.5),
-                        nlmeControl(maxIter = 180))
-
-=======
 LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1)
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
 
 ## gompertz 
 
@@ -163,10 +125,6 @@ Timing <- psi[id,3]
 LwrAsy <- psi[id,4]
 ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
 
-<<<<<<< HEAD
-glmer_out <- lme4::glmer(stage ~ age + (1 | tagid), family = "gaussian", data = puberty_sr)
-summary(glmer_out)
-=======
 return(ypred)
 }
 
@@ -222,39 +180,8 @@ par(mfrow=c(2,2))
 plot(GompertzFit.RQ1, plot.type = "individual.fit", new = FALSE, ilist = 1:4, smooth = TRUE, ylog = TRUE, pch = 1, col = "Blue", xlab = "age", ylab = "stage")
 
 plot(GompertzFit.RQ1, plot.type = "npde")
->>>>>>> bc487b5a0300b843e1f8bcc882ee175ad8e16ead
 
 ```
-```{r trying lavaan}
-
-nonlinear_model <- '
-  # Growth curve
-    # Intercepts
-    growth ~ b0 + b1 * age + b2 * age^2
-
-    # Logistic growth curve
-    stage ~ plogis(growth)
-
-  # Random effects
-    # Specify random effects for growth
-    growth ~~ 1 * growth
-
-  # Residuals
-    # Specify residuals for stage
-    stage ~~ 1 * stage
-'
-
-
-# Fit the mixed effects model using lavaan and lme4
-fit <- lavaan::sem(nonlinear_model, data = puberty_sr)
-
-# Print the results
-summary(fit)
-
-
-```
-
-
 
 ```{r hormones}
 
