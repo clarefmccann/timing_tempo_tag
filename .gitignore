@@ -2,3 +2,5 @@
 .Rhistory
 output/
 Allwaves_PubertyComposite_updated.csv
+data/
+*.csv

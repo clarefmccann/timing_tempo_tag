@@ -1,6 +1,6 @@
 ---
 title: "deriving timing & tempo"
-author: "cfm & amalia & sjc"
+author: "cfm"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -33,323 +33,304 @@ options(scipen=999)
 ```{r Load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
 # load packages
 library(pacman)
-pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, saemix, install = TRUE)
+pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, saemix, lavaan, install = TRUE)
 ```
 
 ### setting root path
 
 ```{r root path}
 
-cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
-proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
-q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
+# cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
+# proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
+# q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
+
+root = "/Users/clare/Dropbox (University of Oregon)/mine/projects/timing_tempo_tag/"
 
 ```
 
-### loading in data from CAS 
+### loading in data  
 
 ```{r loading in data}
 
 ## for puberty self-report variables 
 
-puberty_sr <- read.csv(paste0(q_path, "puberty/Allwaves_PubertyComposite_updated.csv")) %>%
+puberty_sr <- read.csv(paste0(root, "Allwaves_PubertyComposite_2024.05.07.csv")) %>%
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
 
-# age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>% 
-#   mutate(tagid = as.factor(tagid),
-#          wave = as.factor(wave)) %>% 
-#   select(tagid, wave, age_menarche)
-
 ```
-### make df
+
+## make df
 
 ```{r making df}
 
-## IDs missing PUBcomp: TAG014 W1, TAG057 W1, TAG114 W1, TAG116 W3, TAG130 W1, TAG141 W1
-
-## filtering puberty doc 
-
 puberty_sr <- puberty_sr %>% 
-  filter(!is.na(age),
-         !is.na(stage))
-
-df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
-
-# df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
-
-# df <- df %>%
-#   group_by(tagid) %>%
-#   mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
-#   ungroup() %>% 
-#   mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
-# 
-# ## centering age by sample set mean
-# 
-# df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
-
-```
-
-### extracting and visualizing puberty from PUBcomp and hormones
-
-```{r extracting puberty variables}
-## logistic 
-
-logistic.model <- function(psi,id,xidep) {
-t <- xidep[,1]
-TtlGrwth<-psi[id,1]
-Apprch<-psi[id,2]
-Timing<-psi[id,3]
-LwrAsy<-psi[id,4]
-ypred<- LwrAsy+TtlGrwth/(1+exp(-Apprch*(t-Timing)))
-return(ypred)
-}
-
-LogisticData.RQ1 <- saemixData(name.data = df, header = TRUE, name.group = c("tagid"),name.predictors = c( "age"),name.response = c("stage"),name.covariates = c(),name.X = "age")
-
-plot(LogisticData.RQ1)
-
-LogisticModel.RQ1<-saemixModel(model=logistic.model, description = 'Logistic', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1), covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0),ncol = 4, byrow = TRUE),transform.par=c(0,0,0,0))
-
-LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1)
-
-## gompertz 
-
-gompertz.model <- function(psi,id,x) {
+  distinct(tagid, wave, .keep_all = TRUE) 
   
-t <- x[,1]
-TtlGrwth <- psi[id,1]
-Apprch <- psi[id,2]
-Timing <- psi[id,3]
-LwrAsy <- psi[id,4]
-ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
+puberty_wide <- puberty_sr %>%
+  select(tagid, wave, stage) %>%
+  pivot_wider(names_from = "wave", values_from = "stage") %>%
+  rename("pub1" = "1",
+         "pub2" = "2",
+         "pub3" = "3",
+         "pub4" = "4",
+         "pub5" = "5")
+age_wide <- puberty_sr %>%
+  select(tagid, wave, age) %>%
+  pivot_wider(names_from = "wave", values_from = "age") %>%
+  rename("age1" = "1",
+         "age2" = "2",
+         "age3" = "3",
+         "age4" = "4",
+         "age5" = "5")
 
-return(ypred)
-}
+puberty_wide <- full_join(puberty_wide, age_wide, by = "tagid")
 
-NLMEGM.options <- list(seed=1234, displayProgress=FALSE)
+## REMOVE REGRESSING CASES
 
-GompertzData.RQ1 <- saemixData(name.data = df, header = TRUE,
-name.group = c("tagid"), name.predictors = c("age"), name.response = c("stage"),
-name.X = "age")
-
-GompertzModel.RQ1 <- saemixModel(model=gompertz.model,
-description = 'Gompertz', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1),
-covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0), ncol = 4, byrow = TRUE),
-transform.par=c(0,0,0,0))
-
-GompertzFit.RQ1 <- saemix(GompertzModel.RQ1,GompertzData.RQ1, NLMEGM.options)
-
-                                                  
-```
-
-```{r plots & dx}
-
-# Plot of the Logistic, Gompertz, and Richards curves over the data
-L.function <- function(p.lambda1, p.lambda2, p.lambda3, p.lambda4, age){
-resp <- p.lambda1+(p.lambda4-p.lambda1)/(1+(age/p.lambda2)^p.lambda3)
-}
-G.function <- function(p.a, p.b, p.c, p.d, age){
-resp <- p.d+(p.a)*exp(-exp(-p.b*(age-p.c)))
-}
-R.function <- function(p1,p2,p3,p4,p5,age){
-resp <- p4+p1/(1+p5*exp(-p2*(age-p3))*(1/p5))
-}
-p.lambda1 = 5.023; p.lambda2 = 1.392; p.lambda3 = 2.111; p.lambda4 = -0.311;
-p.a = 5.0365; p.b = 0.9493; p.c = 1.8028; p.d = -0.0816;
-p1 = 5.04; p2 = 2.60; p3 = 1.60; p4 = -0.32; p5 = 1.87;
-age <- c(0,1,2,3,4,5)
-logistic.predicted <- L.function(p.lambda1,p.lambda2,p.lambda3,p.lambda4, age)
-
-gompertz.predicted <- G.function(p.a, p.b, p.c, p.d, age)
-
-richards.predicted <- R.function(p1, p2, p3, p4, p5, age)
-
-dfpreds <- data.frame(age=c(age,age,age),stage=c(logistic.predicted,gompertz.predicted,richards.predicted),ID=rep(1),Model=rep(c('Logistic','Gompertz','Richards'),each=6))
-
-ggplot(data = df, aes(x = age, y = stage, group = tagid)) +
-geom_line(color = "lightgray") +
-labs(x = "age") +
-geom_line(data = dfpreds, aes(x = age, y = stage, group = Model, color = Model))
-
-# Diagnostics of the Gompertz curve
-
-par(mfrow=c(2,2))
-
-plot(GompertzFit.RQ1, plot.type = "individual.fit", new = FALSE, ilist = 1:4, smooth = TRUE, ylog = TRUE, pch = 1, col = "Blue", xlab = "age", ylab = "stage")
-
-plot(GompertzFit.RQ1, plot.type = "npde")
+# regressing_ids <- puberty_sr %>%
+#   arrange(tagid, wave) %>%               
+#   group_by(tagid) %>%                   
+#   mutate(stage_diff = stage - lag(stage)) %>%  
+#   filter(stage_diff < 0) %>%            
+#   select(id) %>%                      
+#   distinct()
+# 
+# puberty_sr <- puberty_sr %>% 
+#   filter(!(tagid %in% regressing_ids$tagid))
 
 ```
 
-```{r hormones}
+## mean plots 
 
-### HORMONES 
+```{r plots means}
 
-## creating quadratic age variable 
+# add color for wave
 
-puberty_sr$age_squared <- (puberty_sr$age_centered * puberty_sr$age_centered)
+means <- puberty_sr %>%
+  filter(!is.na(stage)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(stage))
+plot(means, ylim=c(1,5), 
+     xlab = "Time",
+     ylab = "Pubertal Status",
+     main = "Plot of means for Pubertal Status",
+     pch = 16)
 
-## creating latent hormone variable 
-
-horm_var <- '
-
-# Latent Saliva Variables
-dhea =~ dhea1 + dhea2 + dhea3 + dhea4
-estr =~ estr1 + estr2 + estr3 + estr4
-test =~ test1 + test2 + test3 + test4
-
-# Latent Neuroendocrine Systems
-horm =~ dhea + test + est
-
-'
-
-horm_var_fit <- sem(horm_var, data = puberty_sr)
-horm <- predict(horm_var_fit, newdata = puberty_sr, type = "lv", se = FALSE)
-
-
-horm_lin <- lmer(horm ~ age_centered + (1 + age_centered || tagid), data = puberty_sr  %>% 
-                   filter(!is.na(age_centered),
-                          !is.na(age_squared),
-                          !is.na(horm)), REML=FALSE)
-
-horm_quad <- lmer(horm ~ age_centered + age_squared (1 + age_centered + age_squared || tagid), data = puberty_sr  %>% 
-                   filter(!is.na(age_centered),
-                          !is.na(age_squared),
-                          !is.na(horm)), REML=FALSE)
-
-## looking at results 
-
-summary(horm_lin)
-summary(horm_quad)
-
-## model comparison of effects
-
-anova(horm_lin, horm_quad)
-
-## extracting random effects from best fitting model 
-
-horm_resid <- ranef(horm_puberty_quad)$tagid
-horm_resid <- cbind(tagid = as.factor(rownames(horm_resid)), horm_resid)
+puberty_sr %>% 
+  ggplot(aes(age, stage, group = tagid)) +
+  geom_line(alpha = 0.1) +                      
+  stat_smooth(aes(group=1),                     
+              method = "lm", formula = y ~ x + I(x^2), size = 1.5,
+              level = 0.95,
+              color = "blue") +
+  theme_classic() +
+  labs(x = "Age", y = "Pubertal Status", title = "Pubertal Status")
 
 ```
 
-```{r plotting timing + tempo}
+## anthr try at OG code 
 
-## PLOT 
+```{r anthr try at OG code}
 
-## age by puberty 
+# logistic model with random effects
+logistic_model <- function(age, b0, b1, alpha, lambda) {
+b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age - lambda)))) }
 
-sr_puberty_quad_plot <- ggplot(data = puberty_sr,
-                               aes(x = PUBcomp,
-                                   y = age_centered+samplemean,
-                                   col = tagid, 
-                                   group = tagid)) +
-  geom_point(size = 1.2,
-             alpha = .8, 
-             position = "jitter") +
-  theme_minimal()+
-  theme(legend.position="none") +
-  geom_smooth(method = lm, 
-              se = FALSE,
-              size= .5,
-              alpha = .8) + 
-  labs(title = "Age by Self-Report Pubertal Stage",
-       subtitle = "Each ID's slope is indicated by a regression line")
+# the starting values for the parameters
 
-print(sr_puberty_quad_plot)
+## we're saying 0.9 is the avg rate of pubertal dev & 13.5 is the avg age of mid-puberty 
+start_vals <- list(fixed = c(alpha = 0.9, lambda = 13.5))
 
-## residual checks 
+# removing NAs for now but there could be some sort of fancy way to deal with this
+puberty_sr <- puberty_sr %>% 
+  filter(!is.na(stage) & !is.na(age) & !is.na(tagid))
 
-plot(fitted(sr_puberty_quad), resid(sr_puberty_quad, type = "pearson"))
+# fit THE nonlinear mixed effects model
+## set lower asym at stage 1 and upper asym at stage 5, grouping by tagid
+fit <- nlme(stage ~ logistic_model(age, 1, 5, alpha, lambda),
+            data = puberty_sr,
+            fixed = alpha + lambda ~ 1,
+            random = pdDiag(alpha + lambda ~ 1),
+            groups = ~ tagid,
+            start = start_vals, method = "ML")
 
-qqnorm(resid(sr_puberty_quad))
+# the fitted values 
+## predicted stage based on an individual's age
+fitted_values <- fitted(fit)
 
-qqnorm(ranef(sr_puberty_quad)$tagid[,1])
+# the individual parameter estimates 
+## alpha = more pos values --> slower dev, more neg values --> faster dev
+## lambda = more pos values --> later mid-pubertal peak, more neg values --> earlier mid-pubertal peak
+individual_estimates <- ranef(fit)
 
-## cleaning tagid for puberty doc so that puberty doc and cortical doc will have same subjects 
+# summary
+summary(fit)
 
-puberty_sr_tagid <- puberty_sr %>% 
-  mutate(tagid = as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = "")),
-         wave = as.factor(paste(formatC(wave, width=2, flag="0"))))
+# individual estimates + wide
+individual_estimates_df <- data.frame(id = rownames(individual_estimates), individual_estimates) %>% 
+  rename("tagid" = "id")
 
-## fix tagid for puberty and random effects data frames for smoother combining of data frames
+puberty_wide <- left_join(puberty_wide, individual_estimates_df, by = "tagid")
 
-sr_eff_quad_tagid <- sr_eff_quad %>% 
-  mutate(tagid=as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = ""))) %>%
-  mutate(timing =`(Intercept)`,
-         tempo = age_centered)%>%
-  select(1,4,5)
+write.csv(puberty_wide, file = "puberty_wide_plus_alpha_lambda.csv")
 
-## cleaning environment 
+puberty_plot <- cbind(fitted_values, puberty_sr) 
+puberty_plot <- left_join(puberty_plot, individual_estimates_df, by = "tagid")
 
-rm(sr_eff_quad, puberty_sr, sr_puberty_linear, sr_puberty_quad, sr_puberty_quad_plot)
+#write.csv(puberty_plot, file = "puberty_long_plus_alpha_lambda.csv")
 
-## MORE PLOTS (for poster + manuscript)
+fitted_values_plot <- ggplot(data = puberty_plot, aes(x = age, y = fitted_values, color = tagid)) +
+  geom_point(aes(y = fitted_values), size = 1, shape = 16) +  
+  geom_line(aes(y = fitted_values), size = 0.5, linetype = "solid") +
+  labs(
+    title = "predicted values - log model",
+    x = "age",
+    y = "predicted pubertal stage",
+    color = "tagid"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
 
-## timing and tempo 
+print(fitted_values_plot)
 
-timing_tempo <- ggplot(sr_eff_quad_tagid, 
-                       aes(x = timing,
-                           y = tempo))+
-  geom_smooth(method = "lm", se = FALSE, colour = "#663333", size = 1.2) +
-  geom_point(colour = "#CC99CC", alpha = 1, size = 2) +
-  ggtitle("Extracted Timing and Tempo")+
-  xlab("Timing") +
-  ylab("Tempo")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
-
-# ggsave(timing_tempo, filename = paste0(proj_path, "script_output/timing_tempo.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
-
-
-puberty_plot <- ggplot(puberty_sr_tagid,
-                       aes(x = age_centered+samplemean,
-                           y = PUBcomp, 
-                           group = tagid, 
-                           col = tagid)) +
-  geom_point(alpha=1) +
-  geom_line(alpha=.4) +
-  ggtitle("Puberty Progression Modeled by Age")+
-  theme(legend.position = "none") +
-  xlab("Age (years)") +
-  ylab("Tanner Stage")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
-  
-
-puberty_plot
-
-# ggsave(puberty_plot, filename = paste0(proj_path, "script_output/puberty_by_age.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
-
-puberty_plot_grade <- ggplot(puberty_sr_tagid,
-                       aes(x = grade,
-                           y = PUBcomp, 
-                           group = tagid, 
-                           col = tagid)) +
-  geom_point(alpha=1) +
-  geom_line(alpha=.4) +
-  ggtitle("Puberty Progression Modeled by Grade in School")+
-  theme(legend.position = "none") +
-  xlab("Grade in School") +
-  ylab("Tanner Stage")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
-
-# ggsave(puberty_plot_grade, filename = paste0(proj_path, "script_output/puberty_by_grade.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
-
-## correlation between age and grade 
-
-#cor.test(puberty_sr_tagid$age, puberty_sr_tagid$grade)
-# super correlated = 0.9573725
-
-## cleaning environment 
-
-rm(puberty_plot, timing_tempo)
 
 ```
+
+<!-- ## fixed log plot -->
+<!-- ```{r fix log plot} -->
+<!-- fixed_plot <- ggplot(puberty_sr, aes(x = age, y = stage, color = tagid)) + -->
+<!--   geom_line(aes(y = fitted_values), linetype = "dashed") + -->
+<!--   labs(title = "Fitted (Fixed) Logistic Growth Curves", -->
+<!--        x = "Age", -->
+<!--        y = "Pubertal Stage") + -->
+<!--   theme_minimal()+ -->
+<!--   theme(legend.position = "none") -->
+
+<!-- print(fixed_plot) -->
+<!-- ``` -->
+
+<!-- ## ind log plot  -->
+
+<!-- ```{r ind log plot} -->
+
+<!-- ind_plot <- ggplot(puberty_sr, aes(x = age, y = stage, color = tagid)) + -->
+<!--   geom_line(aes(y = predicted_stage_individual), linetype = "dashed") + -->
+<!--   labs(title = "Fitted (Ind) Logistic Growth Curves", -->
+<!--        x = "Age", -->
+<!--        y = "Pubertal Stage") + -->
+<!--   theme_minimal()+ -->
+<!--   theme(legend.position = "none") -->
+
+<!-- print(ind_plot) -->
+
+
+<!-- ``` -->
+
+<!-- ## OLD -->
+
+<!-- ### linear growth model (lavaan) -->
+
+<!-- ```{r lin} -->
+
+<!-- ## option  -->
+
+<!--  # # Residual variances fixed to be equal: -->
+<!--               #  pub1 ~~ z*pub1 -->
+<!--               #  pub2 ~~ z*pub2 -->
+<!--               #  pub3 ~~ z*pub3 -->
+<!--               #  pub4 ~~ z*pub4 -->
+<!--               #  pub5 ~~ z*pub5 -->
+
+<!-- ##### RUNNING LINEAR MODEL ##### -->
+<!-- model_lin <- ' # Measurement model: -->
+<!--                i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                s =~ 0*pub1 + 1*pub2 + 2*pub3 + 3*pub4 + 4*pub5  ' -->
+<!--   # specify the model -->
+
+<!-- fit_model_lin <- growth(model_lin, data = puberty_wide, missing = "ML") -->
+<!--   # fit linear model using 'growth' function in lavaan package -->
+<!--   # missing = ML imputes missing values -->
+
+<!-- summary(fit_model_lin) -->
+<!--   # call summary of model to get parameter estimates -->
+
+<!-- predict(fit_model_lin) -->
+
+<!-- fitMeasures(fit_model_lin, c("aic", "bic")) -->
+<!--   # fit statistics -->
+
+<!-- ``` -->
+
+
+<!-- ### latent basis model -->
+
+<!-- ```{r latent basis} -->
+
+<!-- ##### RUNNING LATENT BASIS MODEL ##### -->
+<!-- model_latent <- ' # Measurement model: -->
+<!--                   i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                   s =~ 0*pub1 + a*pub2 + b*pub3 + c*pub4 + 1*pub5 ' -->
+<!--   # specify the model -->
+<!--   # fix first and last growth factors to 0 and 1, then use letters to allow other paths to vary freely -->
+
+<!-- fit_model_latent <- growth(model_latent, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_latent) -->
+
+<!-- predict(fit_model_latent) -->
+
+<!-- fitMeasures(fit_model_latent, c("aic", "bic")) -->
+<!--   # fit statistics -->
+
+<!-- ``` -->
+
+<!-- ### quad model  -->
+
+<!-- ```{r quad model} -->
+
+<!-- ## option  -->
+<!-- # # Residual variances fixed to be equal: -->
+<!--                 #   pub1 ~~ z*pub1 -->
+<!--                 #   pub2 ~~ z*pub2 -->
+<!--                 #   pub3 ~~ z*pub3 -->
+<!--                 #   pub4 ~~ z*pub4 -->
+<!--                 #   pub5 ~~ z*pub5  -->
+
+<!-- ##### RUNNING QUADRATIC MODEL ##### -->
+<!-- model_quad <- ' # Measurement model: -->
+<!--                 i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                 s =~ 0*pub1 + 1*pub2 + 2*pub3 + 3*pub4 + 4*pub5 -->
+<!--                 q =~ 0*pub1 + 1*pub2 + 4*pub3 + 9*pub4 + 16*pub5 ' -->
+
+<!-- fit_model_quad <- growth(model_quad, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_quad) -->
+
+<!-- predict(fit_model_quad) -->
+
+<!-- fitMeasures(fit_model_quad, c("aic", "bic")) -->
+<!-- ``` -->
+
+<!-- ### rel model -->
+
+<!-- ```{r rel model} -->
+
+<!-- ##### RUNNING RELATIVE MODEL ##### -->
+<!-- model_rel <- ' # Measurement model: -->
+<!--                 i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                 s =~ 0*pub1 + pub2 + pub3 + pub4 + pub5 ' -->
+
+<!-- fit_model_rel <- growth(model_rel, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_rel) -->
+
+<!-- ## extracting the slopes  -->
+
+<!-- rel_pred <- predict(fit_model_rel) -->
+
+<!-- fitMeasures(fit_model_rel, c("aic", "bic")) -->
+
+<!-- ``` -->
 
