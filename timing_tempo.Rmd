@@ -33,120 +33,85 @@ options(scipen=999)
 ```{r load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
 # load packages
 library(pacman)
-<<<<<<< HEAD
-pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, install = TRUE)
-=======
-pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, saemix, lavaan, install = TRUE)
->>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
+pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, saemix, lavaan, here, install = TRUE)
 ```
 
 ### setting root path
 
 ```{r root path}
 
-<<<<<<< HEAD
-cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
-proj_root = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
-data_root = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/Long/"
 
-# proj_root = "/Users/clarefmccann/University\ of\ Oregon\ Dropbox/Clare\ McCann/mine/projects/tag-projs/timing_tempo_tag/"
-# data_root = "/Users/clarefmccann/University\ of\ Oregon\ Dropbox/Clare\ McCann/mine/projects/tag-projs/data-tag/"
+cas_dir <- Sys.getenv("CAS_DIR")
+proj_root <-  here()
+data_root <- paste0(cas_dir, "/TAG/data/Qualtrics_Output/Long/")
+
 
 ## UPDATE FILE NAMES IF NEEDED
 
 pds_file_name = "PDS_AllObs_Chronological.csv"
 pbip_file_name = "PBIP_AllObs_Chronological.csv"
-age_file_name = "allwaves_age_long_06.13.2025.csv"
+age_file_name = "sample_ages_13feb26.csv"
 pub_comp_file_name = "Allwaves_PubertyComposite_updated.csv"
 
 ```
 
-### loading in report data  
-=======
-# cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
-# proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
-# q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
-
-root = ".../projects/timing_tempo_tag/"
-
-```
-
 ### loading in data  
->>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
 
 ```{r loading in data}
 
 ## for puberty self-report variables
 
-<<<<<<< HEAD
-### LOAD IN PDS
-
-pds <- read.csv(paste0(data_root, pds_file_name)) %>%
-=======
-puberty_sr <- read.csv(paste0(root, "Allwaves_PubertyComposite_2024.05.07.csv")) %>%
->>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
+pds <- read.csv(paste0(data_root, pds_file_name)) %>% 
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
-  select(tagid, wave, adrenf2, gonadf2, pdss) %>% 
   rename("adrenal_pdss" = "adrenf2",
-         "gonadal_pdss" = "gonadf2")
-
-<<<<<<< HEAD
-### LOAD IN PBIP
-
-pbip <- read.csv(paste0(data_root, pbip_file_name)) %>%
+         "gonadal_pdss" = "gonadf2") %>% 
+  select(tagid, wave, adrenal_pdss, gonadal_pdss, pdss)
+pbip <- read.csv(paste0(data_root, pbip_file_name)) %>% 
+  select(tagid, wave, stage, PBIP_2A, PBIP_1A) %>% 
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
-  select(tagid, wave, stage, PBIP_1A, PBIP_2A) %>% 
   rename("adrenal_pbip" = "PBIP_2A",
-         "gonadal_pbip" = "PBIP_1A")
-
-pub_comp <- read.csv(paste0(data_root, pub_comp_file_name)) %>%
+         "gonadal_pbip" = "PBIP_1A") %>% 
+  select(tagid, wave, adrenal_pbip, gonadal_pbip)
+comp <- read.csv(paste0(data_root, pub_comp_file_name)) %>% 
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, ADRENcomp, GONADcomp, PUBcomp)
 
-# age <- read.csv(paste0(cas_dir, "behavior/Demographics/", age_file_name)) %>%
-#   pivot_longer(cols = 2:14, names_to = "wave", values_to = "age") %>% 
-#   # mutate(tagid=paste0("TAG",
-#   #                     substring(tagid,first=5,last=length(tagid)))) %>% 
-#     filter(
-#     !wave == "w1s1_age",
-#     !wave == "w2s1_age", 
-#     !wave == "w3s1_age",
-#     !wave == "w4s1_age", 
-#     !wave == "w5s1_age",
-#     !wave == "w6s1_age"
-#   ) %>% 
-#   mutate(
-#     wave = ifelse(wave == "w1s2_age", "1",
-#                   ifelse(wave == "w2s2_age", "2",
-#                          ifelse(wave == "w3s2_age", "3",
-#                                 ifelse(wave == "w4s2_age", "4",
-#                                        ifelse(wave == "w5s2_age", "5",
-#                                               ifelse(wave == "w6s2_age", "6",
-#                                                      ifelse(wave == "sos_age", "SOS",
-#                                               wave)))))))) %>% 
-#   filter(!is.na(age))
-
-age <- read.csv(paste0(cas_dir, "behavior/Demographics/", age_file_name)) 
+age <- read.csv(paste0(cas_dir, "/TAG/data/Demographics/", age_file_name)) %>% 
+  pivot_longer(cols = 2:14, names_to = "wave", values_to = "age") %>%
+  filter(
+    !wave == "w1s1_age",
+    !wave == "w2s1_age",
+    !wave == "w3s1_age",
+    !wave == "w4s1_age",
+    !wave == "w5s1_age",
+    !wave == "w6s1_age"
+  ) %>%
+  mutate(
+    wave = ifelse(wave == "w1s2_age", "1",
+                  ifelse(wave == "w2s2_age", "2",
+                         ifelse(wave == "w3s2_age", "3",
+                                ifelse(wave == "w4s2_age", "4",
+                                       ifelse(wave == "w5s2_age", "5",
+                                              ifelse(wave == "w6s2_age", "6",
+                                                     ifelse(wave == "sos_age", "SOS",
+                                              wave)))))))) %>%
+  filter(!is.na(age))
 
 puberty_sr <- left_join(pds, pbip, by = c("tagid", "wave"))
-puberty_sr <- left_join(puberty_sr, pub_comp, by = c("tagid", "wave"))
+puberty_sr <- left_join(puberty_sr, comp, by = c("tagid", "wave"))
 puberty_sr <- left_join(puberty_sr, age, by = c("tagid", "wave"))
 
-```
-### OPTION TO REMOVE REGRESSING CASES
-=======
-```
+rm(age, comp, pbip, pds, age_file_name, pbip_file_name, pub_comp_file_name, pds_file_name)
 
-## make df
->>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
+```
 
 ```{r option to remove regressors}
 
-<<<<<<< HEAD
 ## REMOVE REGRESSING CASES
+
 ### CHANGE PUBERTY VAR TO VARIABLE OF INTEREST
 
 regressing_ids <- puberty_sr %>%
@@ -156,7 +121,7 @@ regressing_ids <- puberty_sr %>%
   filter(stage_diff < 0) %>%
   select(tagid) %>%
   distinct()
-# 
+
 # puberty_sr <- puberty_sr %>% 
 #   filter(!(tagid %in% regressing_ids$tagid))
 
