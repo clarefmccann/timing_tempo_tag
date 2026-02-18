@@ -33,13 +33,18 @@ options(scipen=999)
 ```{r load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
 # load packages
 library(pacman)
+<<<<<<< HEAD
 pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, install = TRUE)
+=======
+pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, saemix, lavaan, install = TRUE)
+>>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
 ```
 
 ### setting root path
 
 ```{r root path}
 
+<<<<<<< HEAD
 cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
 proj_root = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
 data_root = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/Long/"
@@ -57,20 +62,36 @@ pub_comp_file_name = "Allwaves_PubertyComposite_updated.csv"
 ```
 
 ### loading in report data  
+=======
+# cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
+# proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
+# q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
+
+root = ".../projects/timing_tempo_tag/"
+
+```
+
+### loading in data  
+>>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
 
 ```{r loading in data}
 
 ## for puberty self-report variables
 
+<<<<<<< HEAD
 ### LOAD IN PDS
 
 pds <- read.csv(paste0(data_root, pds_file_name)) %>%
+=======
+puberty_sr <- read.csv(paste0(root, "Allwaves_PubertyComposite_2024.05.07.csv")) %>%
+>>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
   select(tagid, wave, adrenf2, gonadf2, pdss) %>% 
   rename("adrenal_pdss" = "adrenf2",
          "gonadal_pdss" = "gonadf2")
 
+<<<<<<< HEAD
 ### LOAD IN PBIP
 
 pbip <- read.csv(paste0(data_root, pbip_file_name)) %>%
@@ -116,9 +137,15 @@ puberty_sr <- left_join(puberty_sr, age, by = c("tagid", "wave"))
 
 ```
 ### OPTION TO REMOVE REGRESSING CASES
+=======
+```
+
+## make df
+>>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
 
 ```{r option to remove regressors}
 
+<<<<<<< HEAD
 ## REMOVE REGRESSING CASES
 ### CHANGE PUBERTY VAR TO VARIABLE OF INTEREST
 
@@ -809,3 +836,137 @@ write.csv(all_estimates, paste0(proj_root, "TAG_timing_tempo_04.2025.csv"), row.
 
 <!-- ``` -->
 
+=======
+puberty_sr <- puberty_sr %>% 
+  distinct(tagid, wave, .keep_all = TRUE) 
+  
+puberty_wide <- puberty_sr %>%
+  select(tagid, wave, stage) %>%
+  pivot_wider(names_from = "wave", values_from = "stage") %>%
+  rename("pub1" = "1",
+         "pub2" = "2",
+         "pub3" = "3",
+         "pub4" = "4",
+         "pub5" = "5")
+age_wide <- puberty_sr %>%
+  select(tagid, wave, age) %>%
+  pivot_wider(names_from = "wave", values_from = "age") %>%
+  rename("age1" = "1",
+         "age2" = "2",
+         "age3" = "3",
+         "age4" = "4",
+         "age5" = "5")
+
+puberty_wide <- full_join(puberty_wide, age_wide, by = "tagid")
+
+## REMOVE REGRESSING CASES
+
+# regressing_ids <- puberty_sr %>%
+#   arrange(tagid, wave) %>%               
+#   group_by(tagid) %>%                   
+#   mutate(stage_diff = stage - lag(stage)) %>%  
+#   filter(stage_diff < 0) %>%            
+#   select(id) %>%                      
+#   distinct()
+# 
+# puberty_sr <- puberty_sr %>% 
+#   filter(!(tagid %in% regressing_ids$tagid))
+
+```
+
+## mean plots 
+
+```{r plots means}
+
+# add color for wave
+
+means <- puberty_sr %>%
+  filter(!is.na(stage)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(stage))
+plot(means, ylim=c(1,5), 
+     xlab = "Time",
+     ylab = "Pubertal Status",
+     main = "Plot of means for Pubertal Status",
+     pch = 16)
+
+puberty_sr %>% 
+  ggplot(aes(age, stage, group = tagid)) +
+  geom_line(alpha = 0.1) +                      
+  stat_smooth(aes(group=1),                     
+              method = "lm", formula = y ~ x + I(x^2), size = 1.5,
+              level = 0.95,
+              color = "blue") +
+  theme_classic() +
+  labs(x = "Age", y = "Pubertal Status", title = "Pubertal Status")
+
+```
+
+## anthr try at OG code 
+
+```{r anthr try at OG code}
+
+# logistic model with random effects
+logistic_model <- function(age, b0, b1, alpha, lambda) {
+b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age - lambda)))) }
+
+# the starting values for the parameters
+
+## we're saying 0.9 is the avg rate of pubertal dev & 13.5 is the avg age of mid-puberty 
+start_vals <- list(fixed = c(alpha = 0.9, lambda = 13.5))
+
+# removing NAs for now but there could be some sort of fancy way to deal with this
+puberty_sr <- puberty_sr %>% 
+  filter(!is.na(stage) & !is.na(age) & !is.na(tagid))
+
+# fit THE nonlinear mixed effects model
+## set lower asym at stage 1 and upper asym at stage 5, grouping by tagid
+fit <- nlme(stage ~ logistic_model(age, 1, 5, alpha, lambda),
+            data = puberty_sr,
+            fixed = alpha + lambda ~ 1,
+            random = pdDiag(alpha + lambda ~ 1),
+            groups = ~ tagid,
+            start = start_vals, method = "ML")
+
+# the fitted values 
+## predicted stage based on an individual's age
+fitted_values <- fitted(fit)
+
+# the individual parameter estimates 
+## alpha = more pos values --> slower dev, more neg values --> faster dev
+## lambda = more pos values --> later mid-pubertal peak, more neg values --> earlier mid-pubertal peak
+individual_estimates <- ranef(fit)
+
+# summary
+summary(fit)
+
+# individual estimates + wide
+individual_estimates_df <- data.frame(id = rownames(individual_estimates), individual_estimates) %>% 
+  rename("tagid" = "id")
+
+puberty_wide <- left_join(puberty_wide, individual_estimates_df, by = "tagid")
+
+write.csv(puberty_wide, file = "puberty_wide_plus_alpha_lambda.csv")
+
+puberty_plot <- cbind(fitted_values, puberty_sr) 
+puberty_plot <- left_join(puberty_plot, individual_estimates_df, by = "tagid")
+
+#write.csv(puberty_plot, file = "puberty_long_plus_alpha_lambda.csv")
+
+fitted_values_plot <- ggplot(data = puberty_plot, aes(x = age, y = fitted_values, color = tagid)) +
+  geom_point(aes(y = fitted_values), size = 1, shape = 16) +  
+  geom_line(aes(y = fitted_values), size = 0.5, linetype = "solid") +
+  labs(
+    title = "predicted values - log model",
+    x = "age",
+    y = "predicted pubertal stage",
+    color = "tagid"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(fitted_values_plot)
+
+
+```
+>>>>>>> e18315de4b052a9ead02773a98c8fae747ea21e1
