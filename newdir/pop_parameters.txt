@@ -29,7 +29,7 @@ ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
 
 return(ypred)
 }
-<bytecode: 0x7fc9ccca7ab0>
+<bytecode: 0x1276a4608>
   Nb of parameters: 4 
       parameter names:  TtlGrwth Apprch Timing LwrAsy 
       distribution:
@@ -90,14 +90,10 @@ covar    cov.Apprch.Timing   0.01839  0.046  253
 ----------------------------------------------------
 ------  Correlation matrix of random effects  ------
 ----------------------------------------------------
-                omega2.TtlGrwth omega2.Apprch
-omega2.TtlGrwth 1.00            0.76         
-omega2.Apprch   0.76            1.00         
-omega2.Timing   0.12            0.56         
-                omega2.Timing
-omega2.TtlGrwth 0.12         
-omega2.Apprch   0.56         
-omega2.Timing   1.00         
+                omega2.TtlGrwth omega2.Apprch omega2.Timing
+omega2.TtlGrwth 1.00            0.76          0.12         
+omega2.Apprch   0.76            1.00          0.56         
+omega2.Timing   0.12            0.56          1.00         
 ----------------------------------------------------
 ---------------  Statistical criteria  -------------
 ----------------------------------------------------

@@ -1,6 +1,6 @@
 ---
 title: "deriving timing & tempo"
-author: "cfm & amalia & sjc"
+author: "cfm"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -16,7 +16,7 @@ output:
     toc: yes
 ---
 
-### Setting up markdown {.tabset}
+### setting up markdown {.tabset}
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -30,10 +30,10 @@ options(scipen=999)
 
 ### loading required packages
 
-```{r Load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
+```{r load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
 # load packages
 library(pacman)
-pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, saemix, install = TRUE)
+pacman::p_load(dplyr, lme4, nlme, ggplot2, tidyr, lubridate, psych, install = TRUE)
 ```
 
 ### setting root path
@@ -41,315 +41,771 @@ pacman::p_load(dplyr, nlme, ggplot2, tidyr, lubridate, psych, saemix, install = 
 ```{r root path}
 
 cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
-proj_path = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
-q_path = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/"
+proj_root = "/Volumes/psych-cog/dsnlab/TAG/projects/timing_tempo_tag/"
+data_root = "/Volumes/psych-cog/dsnlab/TAG/behavior/Questionnaires/Long/"
+
+# proj_root = "/Users/clarefmccann/University\ of\ Oregon\ Dropbox/Clare\ McCann/mine/projects/tag-projs/timing_tempo_tag/"
+# data_root = "/Users/clarefmccann/University\ of\ Oregon\ Dropbox/Clare\ McCann/mine/projects/tag-projs/data-tag/"
+
+## UPDATE FILE NAMES IF NEEDED
+
+pds_file_name = "PDS_AllObs_Chronological.csv"
+pbip_file_name = "PBIP_AllObs_Chronological.csv"
+age_file_name = "allwaves_age_long_06.13.2025.csv"
+pub_comp_file_name = "Allwaves_PubertyComposite_updated.csv"
 
 ```
 
-### loading in data from CAS 
+### loading in report data  
 
 ```{r loading in data}
 
-## for puberty self-report variables 
+## for puberty self-report variables
 
-puberty_sr <- read.csv(paste0(q_path, "puberty/Allwaves_PubertyComposite_updated.csv")) %>%
+### LOAD IN PDS
+
+pds <- read.csv(paste0(data_root, pds_file_name)) %>%
   mutate(tagid=as.factor(tagid),
          wave=as.factor(wave)) %>%
-  select(tagid, wave, age, PBIP_1A, PBIP_2A, stage, pdss, PUBcomp)
+  select(tagid, wave, adrenf2, gonadf2, pdss) %>% 
+  rename("adrenal_pdss" = "adrenf2",
+         "gonadal_pdss" = "gonadf2")
 
-# age_at_menarche <- read.csv(paste0(q_path, "Puberty/Age_at_menarche.csv")) %>% 
-#   mutate(tagid = as.factor(tagid),
-#          wave = as.factor(wave)) %>% 
-#   select(tagid, wave, age_menarche)
+### LOAD IN PBIP
+
+pbip <- read.csv(paste0(data_root, pbip_file_name)) %>%
+  mutate(tagid=as.factor(tagid),
+         wave=as.factor(wave)) %>%
+  select(tagid, wave, stage, PBIP_1A, PBIP_2A) %>% 
+  rename("adrenal_pbip" = "PBIP_2A",
+         "gonadal_pbip" = "PBIP_1A")
+
+pub_comp <- read.csv(paste0(data_root, pub_comp_file_name)) %>%
+  mutate(tagid=as.factor(tagid),
+         wave=as.factor(wave)) %>%
+  select(tagid, wave, ADRENcomp, GONADcomp, PUBcomp)
+
+# age <- read.csv(paste0(cas_dir, "behavior/Demographics/", age_file_name)) %>%
+#   pivot_longer(cols = 2:14, names_to = "wave", values_to = "age") %>% 
+#   # mutate(tagid=paste0("TAG",
+#   #                     substring(tagid,first=5,last=length(tagid)))) %>% 
+#     filter(
+#     !wave == "w1s1_age",
+#     !wave == "w2s1_age", 
+#     !wave == "w3s1_age",
+#     !wave == "w4s1_age", 
+#     !wave == "w5s1_age",
+#     !wave == "w6s1_age"
+#   ) %>% 
+#   mutate(
+#     wave = ifelse(wave == "w1s2_age", "1",
+#                   ifelse(wave == "w2s2_age", "2",
+#                          ifelse(wave == "w3s2_age", "3",
+#                                 ifelse(wave == "w4s2_age", "4",
+#                                        ifelse(wave == "w5s2_age", "5",
+#                                               ifelse(wave == "w6s2_age", "6",
+#                                                      ifelse(wave == "sos_age", "SOS",
+#                                               wave)))))))) %>% 
+#   filter(!is.na(age))
+
+age <- read.csv(paste0(cas_dir, "behavior/Demographics/", age_file_name)) 
+
+puberty_sr <- left_join(pds, pbip, by = c("tagid", "wave"))
+puberty_sr <- left_join(puberty_sr, pub_comp, by = c("tagid", "wave"))
+puberty_sr <- left_join(puberty_sr, age, by = c("tagid", "wave"))
 
 ```
-### make df
+### OPTION TO REMOVE REGRESSING CASES
 
-```{r making df}
+```{r option to remove regressors}
 
-## IDs missing PUBcomp: TAG014 W1, TAG057 W1, TAG114 W1, TAG116 W3, TAG130 W1, TAG141 W1
+## REMOVE REGRESSING CASES
+### CHANGE PUBERTY VAR TO VARIABLE OF INTEREST
 
-## filtering puberty doc 
+regressing_ids <- puberty_sr %>%
+  arrange(tagid, wave) %>%
+  group_by(tagid) %>%
+  mutate(stage_diff = stage - lag(stage)) %>%
+  filter(stage_diff < 0) %>%
+  select(tagid) %>%
+  distinct()
+# 
+# puberty_sr <- puberty_sr %>% 
+#   filter(!(tagid %in% regressing_ids$tagid))
+
+```
+
+## mean plots 
+
+```{r plots means}
+
+# add color for wave
+
+### STAGE / SUMMARY
+
+print("mean pdss at each wave")
+
+pdss_means <- puberty_sr %>%
+  filter(!is.na(pdss)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(pdss))
+
+plot(pdss_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "PDSS",
+     main = "plot of means overtime (PDSS)",
+     pch = 16)
+
+print("mean stage (PBIP) score at each wave")
+
+stage_means <- puberty_sr %>%
+  filter(!is.na(stage)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(stage))
+
+plot(stage_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "stage (pbip)",
+     main = "plot of means overtime (PBIP - stage)",
+     pch = 16)
+
+print("mean PUBcomp score at each wave")
+
+PUBcomp_means <- puberty_sr %>%
+  filter(!is.na(PUBcomp)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(PUBcomp))
+
+plot(PUBcomp_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "pubcomp",
+     main = "plot of means overtime (pubcomp)",
+     pch = 16)
+
+print("mean pdss adrenal score at each wave")
+
+### ADRENAL 
+
+pdss_adren_means <- puberty_sr %>%
+  filter(!is.na(adrenal_pdss)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(adrenal_pdss))
+
+plot(pdss_adren_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "adrenal pdss",
+     main = "plot of pdss adrenal means overtime",
+     pch = 16)
+
+print("mean pbip adrenal score at each wave")
+
+pbip_adrenal_means <- puberty_sr %>%
+  filter(!is.na(gonadal_pbip)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(gonadal_pbip))
+
+plot(pbip_adrenal_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "adrenal pbip",
+     main = "plot of pbip adrenal means overtime",
+     pch = 16)
+
+print("mean pubcomp adrenal score at each wave")
+
+pubcomp_adrenal_means <- puberty_sr %>%
+  filter(!is.na(ADRENcomp)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(ADRENcomp))
+
+plot(pubcomp_adrenal_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "pubcomp adrenal",
+     main = "plot of comp adrenal means overtime",
+     pch = 16)
+
+### GONADAL 
+
+print("mean pdss gonadal score at each wave")
+
+pdss_gonad_means <- puberty_sr %>%
+  filter(!is.na(gonadal_pdss)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(gonadal_pdss))
+
+plot(pdss_gonad_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "gonadal PDSS",
+     main = "plot of pdss gonadal means overtime",
+     pch = 16)
+
+print("mean pbip gonadal score at each wave")
+
+pbip_gonad_means <- puberty_sr %>%
+  filter(!is.na(gonadal_pbip)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(gonadal_pbip))
+
+plot(pbip_gonad_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "gonadal pbip",
+     main = "plot of pbip gonadal means overtime",
+     pch = 16)
+
+
+print("mean comp gonadal score at each wave")
+
+pubcomp_gonad_means <- puberty_sr %>%
+  filter(!is.na(GONADcomp)) %>%
+  group_by(wave) %>%
+  summarize(mean = mean(gonadal_pbip))
+
+plot(pubcomp_gonad_means, ylim=c(1,5), 
+     xlab = "wave",
+     ylab = "pubcomp gonadal",
+     main = "plot of pubcomp gonadal means overtime",
+     pch = 16)
+
+
+
+adrenal_cor_vars <- puberty_sr[, c("adrenal_pdss", "adrenal_pbip", "ADRENcomp")]
+print("printing adrenal cor matrix")
+print(cor(adrenal_cor_vars, use = "pairwise.complete.obs"))
+
+gonadal_cor_vars <- puberty_sr[, c("gonadal_pdss", "gonadal_pbip", "GONADcomp")]
+print("printing gonadal cor matrix")
+print(cor(gonadal_cor_vars, use = "pairwise.complete.obs"))
+
+total_cor_vars <- puberty_sr[, c("pdss", "stage", "PUBcomp")]
+print("printing total cor matrix")
+print(cor(total_cor_vars, use = "pairwise.complete.obs"))
+
+
+
+```
+
+## observed avg age at TS3 for different measures
+
+```{r obs TS3}
+
+str(puberty_sr)
+puberty_sr$tagid <- as.factor(puberty_sr$tagid)
+
+## means and stuff for stages and things 
+
+print("observed first instance for age at TS3 by pdss")
+
+pdss_avg_age_ts3 <- puberty_sr %>%
+  filter(pdss == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pdss_avg_age_ts3) 
+
+print("observed first instance for age at TS3 by stage (PBIP)")
+
+stage_avg_age_ts3 <- puberty_sr %>%
+  filter(stage == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(stage_avg_age_ts3)
+
+print("observed first instance for age at TS3 by pubcomp")
+
+pubcomp_avg_age_ts3 <- puberty_sr %>%
+  filter(PUBcomp == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pubcomp_avg_age_ts3) 
+
+print("observed first instance for age at TS3 by PDSS adrenal score")
+
+pdss_adrenal_avg_age_ts3 <- puberty_sr %>%
+  filter(adrenal_pdss == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pdss_adrenal_avg_age_ts3) 
+
+print("observed first instance for age at TS3 by pbip adrenal score")
+
+pbip_adrenal_avg_age_ts3 <- puberty_sr %>%
+  filter(adrenal_pbip == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pbip_adrenal_avg_age_ts3) 
+
+print("observed first instance for age at TS3 by pubcomp adrenal score")
+
+pubcomp_adrenal_avg_age_ts3 <- puberty_sr %>%
+  filter(ADRENcomp == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pubcomp_adrenal_avg_age_ts3) 
+
+print("observed first instance for age at TS3 by PDSS gonadal score")
+
+pdss_gonadal_avg_age_ts3 <- puberty_sr %>%
+  filter(gonadal_pdss == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pdss_gonadal_avg_age_ts3)
+
+print("observed first instance for age at TS3 by pubcomp gonadal score")
+
+pubcomp_gonadal_avg_age_ts3 <- puberty_sr %>%
+  filter(GONADcomp == 3) %>%              
+  group_by(tagid) %>%                     
+  slice_min(order_by = age, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%                                 
+  summarize(average_age = mean(age, na.rm = TRUE),
+            min_age = min(age, na.rm = TRUE),
+            max_age = max(age, na.rm = TRUE),
+            n_participants = n_distinct(tagid))
+
+print(pubcomp_gonadal_avg_age_ts3)
+
+```
+
+## viewing the raw data 
+```{r viewing raw data}
+
+## visualizing observations
+
+print("observed PDSS trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = pdss)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed stage (PBIP) trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = stage)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pubcomp trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = PUBcomp)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pdss adrenal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = adrenal_pdss)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pbip adrenal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = adrenal_pbip)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pubcomp adrenal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = ADRENcomp)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pdss gonadal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = gonadal_pdss)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pbip gonadal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = gonadal_pbip)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+print("observed pubcomp gonadal trajectories")
+
+ggplot(puberty_sr, aes(x = age, y = GONADcomp)) +
+  geom_point() +
+  geom_smooth(method = "loess")
+
+
+```
+
+## data preparation
+
+```{r data preparation}
+
+## getting a better idea of the data we have 
+
+obs_per_participant <- puberty_sr %>%
+  group_by(tagid) %>%
+  summarise(observations = n()) %>%
+  ungroup()
+
+obs_distribution <- obs_per_participant %>%
+  group_by(observations) %>%
+  summarise(participants_count = n())
+
+print(obs_distribution)
+
+## creating a mean centered age variable but right now the model is using original age which i think is what we want, right? 
 
 puberty_sr <- puberty_sr %>% 
-  filter(!is.na(age),
-         !is.na(stage))
-
-df <- puberty_sr[,c("tagid", "wave", "age", "stage")]
-
-# df <- left_join(df, age_at_menarche, by = c("tagid", "wave"))
-
-# df <- df %>%
-#   group_by(tagid) %>%
-#   mutate(age_menarche = ifelse(is.na(age_menarche), first(age_menarche, na_rm = TRUE), age_menarche)) %>%
-#   ungroup() %>% 
-#   mutate(age_menarche_c = age_menarche - mean(age_menarche, na.rm = TRUE))
-# 
-# ## centering age by sample set mean
-# 
-# df$age_c <- (df$age - mean(df$age, na.rm = TRUE))
+  filter(!is.na(age) & !is.na(tagid)) %>% 
+  mutate(age_cen = age - mean(age))
 
 ```
 
-### extracting and visualizing puberty from PUBcomp and hormones
+## THE LOOP 
 
-```{r extracting puberty variables}
-## logistic 
+```{r the loop}
 
-logistic.model <- function(psi,id,xidep) {
-t <- xidep[,1]
-TtlGrwth<-psi[id,1]
-Apprch<-psi[id,2]
-Timing<-psi[id,3]
-LwrAsy<-psi[id,4]
-ypred<- LwrAsy+TtlGrwth/(1+exp(-Apprch*(t-Timing)))
-return(ypred)
+### choose what variables you want to use
+
+set.seed(90025)
+
+print("interpretation of values: lambda is timing (or age at peak growth / TS3), alpha is tempo (or rate of change)")
+print("smaller or more negative values for for lambda = earlier timing, positive or larger values for alpha = faster tempo")
+
+puberty_vars <- c("pdss", "stage", "adrenal_pbip", "PUBcomp","GONADcomp", "gonadal_pbip")
+## model does not converge with PDSS or PUBcomp adrenal scores, or PDSS gonadal score
+
+# logistic model with random effects
+logistic_model <- function(age, b0, b1, alpha, lambda) {
+  b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age - lambda))))
 }
 
-LogisticData.RQ1 <- saemixData(name.data = df, header = TRUE, name.group = c("tagid"),name.predictors = c( "age"),name.response = c("stage"),name.covariates = c(),name.X = "age")
+start_vals <- list(fixed = c(alpha = 0.95, lambda = 13.1))
 
-plot(LogisticData.RQ1)
+results_list <- list()
 
-LogisticModel.RQ1<-saemixModel(model=logistic.model, description = 'Logistic', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1), covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0),ncol = 4, byrow = TRUE),transform.par=c(0,0,0,0))
-
-LogisticFit.RQ1 <- saemix(LogisticModel.RQ1,LogisticData.RQ1)
-
-## gompertz 
-
-gompertz.model <- function(psi,id,x) {
+for (var in puberty_vars) {
+  print(paste0("fitting model for: ", var))
   
-t <- x[,1]
-TtlGrwth <- psi[id,1]
-Apprch <- psi[id,2]
-Timing <- psi[id,3]
-LwrAsy <- psi[id,4]
-ypred <- LwrAsy+TtlGrwth*exp(-exp(-Apprch*(t-Timing)))
+  puberty_sr_tmp <- puberty_sr %>%
+    rename(puberty = !!sym(var)) %>%
+    filter(!is.na(puberty) & !is.na(age) & !is.na(tagid))
 
-return(ypred)
-}
+  fit <- nlme(puberty ~ logistic_model(age, 1, 5, alpha, lambda),
+              data = puberty_sr_tmp,
+              fixed = alpha + lambda ~ 1,
+              random = pdDiag(alpha + lambda ~ 1),
+              groups = ~ tagid,
+              start = start_vals,
+              method = "ML")
 
-NLMEGM.options <- list(seed=1234, displayProgress=FALSE)
-
-GompertzData.RQ1 <- saemixData(name.data = df, header = TRUE,
-name.group = c("tagid"), name.predictors = c("age"), name.response = c("stage"),
-name.X = "age")
-
-GompertzModel.RQ1 <- saemixModel(model=gompertz.model,
-description = 'Gompertz', psi0=c(TtlGrwth=5,Apprch=0.9,Timing=13.5,LwrAsy=1),
-covariance.model = matrix(c(1,1,1,0,1,1,1,0,1,1,1,0,0,0,0,0), ncol = 4, byrow = TRUE),
-transform.par=c(0,0,0,0))
-
-GompertzFit.RQ1 <- saemix(GompertzModel.RQ1,GompertzData.RQ1, NLMEGM.options)
-
-                                                  
-```
-
-```{r plots & dx}
-
-# Plot of the Logistic, Gompertz, and Richards curves over the data
-L.function <- function(p.lambda1, p.lambda2, p.lambda3, p.lambda4, age){
-resp <- p.lambda1+(p.lambda4-p.lambda1)/(1+(age/p.lambda2)^p.lambda3)
-}
-G.function <- function(p.a, p.b, p.c, p.d, age){
-resp <- p.d+(p.a)*exp(-exp(-p.b*(age-p.c)))
-}
-R.function <- function(p1,p2,p3,p4,p5,age){
-resp <- p4+p1/(1+p5*exp(-p2*(age-p3))*(1/p5))
-}
-p.lambda1 = 5.023; p.lambda2 = 1.392; p.lambda3 = 2.111; p.lambda4 = -0.311;
-p.a = 5.0365; p.b = 0.9493; p.c = 1.8028; p.d = -0.0816;
-p1 = 5.04; p2 = 2.60; p3 = 1.60; p4 = -0.32; p5 = 1.87;
-age <- c(0,1,2,3,4,5)
-logistic.predicted <- L.function(p.lambda1,p.lambda2,p.lambda3,p.lambda4, age)
-
-gompertz.predicted <- G.function(p.a, p.b, p.c, p.d, age)
-
-richards.predicted <- R.function(p1, p2, p3, p4, p5, age)
-
-dfpreds <- data.frame(age=c(age,age,age),stage=c(logistic.predicted,gompertz.predicted,richards.predicted),ID=rep(1),Model=rep(c('Logistic','Gompertz','Richards'),each=6))
-
-ggplot(data = df, aes(x = age, y = stage, group = tagid)) +
-geom_line(color = "lightgray") +
-labs(x = "age") +
-geom_line(data = dfpreds, aes(x = age, y = stage, group = Model, color = Model))
-
-# Diagnostics of the Gompertz curve
-
-par(mfrow=c(2,2))
-
-plot(GompertzFit.RQ1, plot.type = "individual.fit", new = FALSE, ilist = 1:4, smooth = TRUE, ylog = TRUE, pch = 1, col = "Blue", xlab = "age", ylab = "stage")
-
-plot(GompertzFit.RQ1, plot.type = "npde")
-
-```
-
-```{r hormones}
-
-### HORMONES 
-
-## creating quadratic age variable 
-
-puberty_sr$age_squared <- (puberty_sr$age_centered * puberty_sr$age_centered)
-
-## creating latent hormone variable 
-
-horm_var <- '
-
-# Latent Saliva Variables
-dhea =~ dhea1 + dhea2 + dhea3 + dhea4
-estr =~ estr1 + estr2 + estr3 + estr4
-test =~ test1 + test2 + test3 + test4
-
-# Latent Neuroendocrine Systems
-horm =~ dhea + test + est
-
-'
-
-horm_var_fit <- sem(horm_var, data = puberty_sr)
-horm <- predict(horm_var_fit, newdata = puberty_sr, type = "lv", se = FALSE)
-
-
-horm_lin <- lmer(horm ~ age_centered + (1 + age_centered || tagid), data = puberty_sr  %>% 
-                   filter(!is.na(age_centered),
-                          !is.na(age_squared),
-                          !is.na(horm)), REML=FALSE)
-
-horm_quad <- lmer(horm ~ age_centered + age_squared (1 + age_centered + age_squared || tagid), data = puberty_sr  %>% 
-                   filter(!is.na(age_centered),
-                          !is.na(age_squared),
-                          !is.na(horm)), REML=FALSE)
-
-## looking at results 
-
-summary(horm_lin)
-summary(horm_quad)
-
-## model comparison of effects
-
-anova(horm_lin, horm_quad)
-
-## extracting random effects from best fitting model 
-
-horm_resid <- ranef(horm_puberty_quad)$tagid
-horm_resid <- cbind(tagid = as.factor(rownames(horm_resid)), horm_resid)
-
-```
-
-```{r plotting timing + tempo}
-
-## PLOT 
-
-## age by puberty 
-
-sr_puberty_quad_plot <- ggplot(data = puberty_sr,
-                               aes(x = PUBcomp,
-                                   y = age_centered+samplemean,
-                                   col = tagid, 
-                                   group = tagid)) +
-  geom_point(size = 1.2,
-             alpha = .8, 
-             position = "jitter") +
-  theme_minimal()+
-  theme(legend.position="none") +
-  geom_smooth(method = lm, 
-              se = FALSE,
-              size= .5,
-              alpha = .8) + 
-  labs(title = "Age by Self-Report Pubertal Stage",
-       subtitle = "Each ID's slope is indicated by a regression line")
-
-print(sr_puberty_quad_plot)
-
-## residual checks 
-
-plot(fitted(sr_puberty_quad), resid(sr_puberty_quad, type = "pearson"))
-
-qqnorm(resid(sr_puberty_quad))
-
-qqnorm(ranef(sr_puberty_quad)$tagid[,1])
-
-## cleaning tagid for puberty doc so that puberty doc and cortical doc will have same subjects 
-
-puberty_sr_tagid <- puberty_sr %>% 
-  mutate(tagid = as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = "")),
-         wave = as.factor(paste(formatC(wave, width=2, flag="0"))))
-
-## fix tagid for puberty and random effects data frames for smoother combining of data frames
-
-sr_eff_quad_tagid <- sr_eff_quad %>% 
-  mutate(tagid=as.factor(paste("sub-TAG", formatC(tagid, width=3, flag="0"), sep = ""))) %>%
-  mutate(timing =`(Intercept)`,
-         tempo = age_centered)%>%
-  select(1,4,5)
-
-## cleaning environment 
-
-rm(sr_eff_quad, puberty_sr, sr_puberty_linear, sr_puberty_quad, sr_puberty_quad_plot)
-
-## MORE PLOTS (for poster + manuscript)
-
-## timing and tempo 
-
-timing_tempo <- ggplot(sr_eff_quad_tagid, 
-                       aes(x = timing,
-                           y = tempo))+
-  geom_smooth(method = "lm", se = FALSE, colour = "#663333", size = 1.2) +
-  geom_point(colour = "#CC99CC", alpha = 1, size = 2) +
-  ggtitle("Extracted Timing and Tempo")+
-  xlab("Timing") +
-  ylab("Tempo")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
-
-# ggsave(timing_tempo, filename = paste0(proj_path, "script_output/timing_tempo.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
-
-
-puberty_plot <- ggplot(puberty_sr_tagid,
-                       aes(x = age_centered+samplemean,
-                           y = PUBcomp, 
-                           group = tagid, 
-                           col = tagid)) +
-  geom_point(alpha=1) +
-  geom_line(alpha=.4) +
-  ggtitle("Puberty Progression Modeled by Age")+
-  theme(legend.position = "none") +
-  xlab("Age (years)") +
-  ylab("Tanner Stage")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
+  fitted_values <- fitted(fit)
+  individual_estimates <- ranef(fit)
+  individual_estimates_df <- data.frame(id = rownames(individual_estimates), individual_estimates) %>%
+    rename("tagid" = "id")
   
+  puberty_plot <- cbind(fitted_values, puberty_sr_tmp)
+  puberty_plot <- left_join(puberty_plot, individual_estimates_df, by = "tagid")
+  
+  fitted_values_plot <- ggplot(data = puberty_plot, aes(x = age, y = fitted_values, color = tagid)) +
+    geom_point(aes(y = fitted_values), size = 1, shape = 16) +  
+    geom_line(aes(y = fitted_values), size = 0.5, linetype = "solid") +
+    labs(
+      title = paste("predicted values -", var),
+      x = "age",
+      y = "predicted pubertal stage",
+      color = "tagid"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  print(paste0("printing fitted values plot for", var))
+  
+  print(fitted_values_plot)
+  
+  results_list[[var]] <- list(
+    fit = fit,
+    fitted_values = fitted_values,
+    individual_estimates = individual_estimates,
+    plot = fitted_values_plot
+  )
+  
+  
+  # write.csv(puberty_wide, paste0("puberty_wide_", var, ".csv"))
+  # write.csv(puberty_plot, paste0("puberty_plot_", var, ".csv"))
+}
 
-puberty_plot
+all_estimates <- NULL
 
-# ggsave(puberty_plot, filename = paste0(proj_path, "script_output/puberty_by_age.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
+for (var in names(results_list)) {
+  estimates <- results_list[[var]]$individual_estimates
+  estimates_df <- data.frame(tagid = rownames(estimates), estimates, row.names = NULL)
+  
+  colnames(estimates_df)[-1] <- paste0(var, "_", colnames(estimates_df)[-1])
+  
+  if (is.null(all_estimates)) {
+    all_estimates <- estimates_df
+  } else {
+    all_estimates <- full_join(all_estimates, estimates_df, by = "tagid")
+  }
+}
 
-puberty_plot_grade <- ggplot(puberty_sr_tagid,
-                       aes(x = grade,
-                           y = PUBcomp, 
-                           group = tagid, 
-                           col = tagid)) +
-  geom_point(alpha=1) +
-  geom_line(alpha=.4) +
-  ggtitle("Puberty Progression Modeled by Grade in School")+
-  theme(legend.position = "none") +
-  xlab("Grade in School") +
-  ylab("Tanner Stage")+
-  theme_minimal(base_size = 26)+
-  theme(legend.position = "none",
-        text = element_text(family = "Tahoma", color = "#330000"))
 
-# ggsave(puberty_plot_grade, filename = paste0(proj_path, "script_output/puberty_by_grade.png"), width=8, height=8, units='in', dpi=300, bg = "transparent")
+write.csv(all_estimates, paste0(proj_root, "TAG_timing_tempo_04.2025.csv"), row.names = FALSE)
 
-## correlation between age and grade 
-
-#cor.test(puberty_sr_tagid$age, puberty_sr_tagid$grade)
-# super correlated = 0.9573725
-
-## cleaning environment 
-
-rm(puberty_plot, timing_tempo)
 
 ```
+
+#### testing different lambda and alpha start values 
+
+```{r testing diff lambda & alpha}
+
+##### CHANGE IN STARTING VALUES DID NOT SIGNIFICANTLY IMPACT MODEL FIT OR ESTIMATES
+
+# set.seed(12000)
+# 
+# ### remove a few observations and see if results hold 
+# 
+# logistic_model <- function(age, b0, b1, alpha, lambda) {
+# b0 + (b1 - b0) * (1 / (1 + exp(-alpha * (age - lambda)))) }
+# 
+# 
+# fit_logistic_model <- function(data, alpha_start, lambda_start) {
+# 
+#   start_vals <- list(fixed = c(alpha = alpha_start, lambda = lambda_start))
+#   
+# 
+#   fit <- tryCatch(
+#     {
+#       nlme(
+#         pdss ~ logistic_model(age, 1, 5, alpha, lambda),
+#         data = puberty_sr,
+#         fixed = alpha + lambda ~ 1,
+#         random = pdDiag(alpha + lambda ~ 1),
+#         groups = ~ tagid,
+#         start = start_vals,
+#         method = "ML"
+#       )
+#     },
+#     error = function(e) NULL
+#   )
+#   
+#   return(fit)
+# }
+# 
+# 
+# ## played around with a few different ranges, the model seems to be sensitive to this (won't converge if the range is too big)
+# alpha_range <- seq(0.7, 1.0, by = 0.05)
+# lambda_range <- seq(12, 13.5, by = 0.1) 
+# 
+# 
+# results <- data.frame(
+#   alpha = numeric(),
+#   lambda = numeric(),
+#   logLik = numeric(),  
+#   AIC = numeric(),     
+#   BIC = numeric()     
+# )
+# 
+# 
+# for (alpha_val in alpha_range) {
+#   for (lambda_val in lambda_range) {
+#     fit <- fit_logistic_model(puberty_sr, alpha_val, lambda_val)
+#     
+#     if (!is.null(fit)) {
+# 
+#       results <- results %>%
+#         add_row(
+#           alpha = alpha_val,
+#           lambda = lambda_val,
+#           logLik = as.numeric(logLik(fit)),
+#           AIC = AIC(fit),
+#           BIC = BIC(fit)
+#         )
+#     }
+#   }
+# }
+# 
+# best_model <- results %>% arrange(AIC) %>% slice(1)
+# 
+# 
+# print(results)
+# 
+# # best combination of alpha and lambda
+# print(best_model) ## alpha = 0.95, lambda = 12.1 // now it's giving me a different combo, 0.95 and 13.1... i think its bcz i messed with the range of start values to try and added back in random slope bcz it was converging with the new range (i just made the range a bit smaller)
+
+
+
+
+
+
+```
+
+<!-- ## fixed log plot -->
+<!-- ```{r fix log plot} -->
+<!-- fixed_plot <- ggplot(puberty_sr, aes(x = age, y = stage, color = tagid)) + -->
+<!--   geom_line(aes(y = fitted_values), linetype = "dashed") + -->
+<!--   labs(title = "Fitted (Fixed) Logistic Growth Curves", -->
+<!--        x = "Age", -->
+<!--        y = "Pubertal Stage") + -->
+<!--   theme_minimal()+ -->
+<!--   theme(legend.position = "none") -->
+
+<!-- print(fixed_plot) -->
+<!-- ``` -->
+
+<!-- ## ind log plot  -->
+
+<!-- ```{r ind log plot} -->
+
+<!-- ind_plot <- ggplot(puberty_sr, aes(x = age, y = stage, color = tagid)) + -->
+<!--   geom_line(aes(y = predicted_stage_individual), linetype = "dashed") + -->
+<!--   labs(title = "Fitted (Ind) Logistic Growth Curves", -->
+<!--        x = "Age", -->
+<!--        y = "Pubertal Stage") + -->
+<!--   theme_minimal()+ -->
+<!--   theme(legend.position = "none") -->
+
+<!-- print(ind_plot) -->
+
+
+<!-- ``` -->
+
+<!-- ## OLD -->
+
+<!-- ### linear growth model (lavaan) -->
+
+<!-- ```{r lin} -->
+
+<!-- ## option  -->
+
+<!--  # # Residual variances fixed to be equal: -->
+<!--               #  pub1 ~~ z*pub1 -->
+<!--               #  pub2 ~~ z*pub2 -->
+<!--               #  pub3 ~~ z*pub3 -->
+<!--               #  pub4 ~~ z*pub4 -->
+<!--               #  pub5 ~~ z*pub5 -->
+
+<!-- ##### RUNNING LINEAR MODEL ##### -->
+<!-- model_lin <- ' # Measurement model: -->
+<!--                i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                s =~ 0*pub1 + 1*pub2 + 2*pub3 + 3*pub4 + 4*pub5  ' -->
+<!--   # specify the model -->
+
+<!-- fit_model_lin <- growth(model_lin, data = puberty_wide, missing = "ML") -->
+<!--   # fit linear model using 'growth' function in lavaan package -->
+<!--   # missing = ML imputes missing values -->
+
+<!-- summary(fit_model_lin) -->
+<!--   # call summary of model to get parameter estimates -->
+
+<!-- predict(fit_model_lin) -->
+
+<!-- fitMeasures(fit_model_lin, c("aic", "bic")) -->
+<!--   # fit statistics -->
+
+<!-- ``` -->
+
+
+<!-- ### latent basis model -->
+
+<!-- ```{r latent basis} -->
+
+<!-- ##### RUNNING LATENT BASIS MODEL ##### -->
+<!-- model_latent <- ' # Measurement model: -->
+<!--                   i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                   s =~ 0*pub1 + a*pub2 + b*pub3 + c*pub4 + 1*pub5 ' -->
+<!--   # specify the model -->
+<!--   # fix first and last growth factors to 0 and 1, then use letters to allow other paths to vary freely -->
+
+<!-- fit_model_latent <- growth(model_latent, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_latent) -->
+
+<!-- predict(fit_model_latent) -->
+
+<!-- fitMeasures(fit_model_latent, c("aic", "bic")) -->
+<!--   # fit statistics -->
+
+<!-- ``` -->
+
+<!-- ### quad model  -->
+
+<!-- ```{r quad model} -->
+
+<!-- ## option  -->
+<!-- # # Residual variances fixed to be equal: -->
+<!--                 #   pub1 ~~ z*pub1 -->
+<!--                 #   pub2 ~~ z*pub2 -->
+<!--                 #   pub3 ~~ z*pub3 -->
+<!--                 #   pub4 ~~ z*pub4 -->
+<!--                 #   pub5 ~~ z*pub5  -->
+
+<!-- ##### RUNNING QUADRATIC MODEL ##### -->
+<!-- model_quad <- ' # Measurement model: -->
+<!--                 i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                 s =~ 0*pub1 + 1*pub2 + 2*pub3 + 3*pub4 + 4*pub5 -->
+<!--                 q =~ 0*pub1 + 1*pub2 + 4*pub3 + 9*pub4 + 16*pub5 ' -->
+
+<!-- fit_model_quad <- growth(model_quad, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_quad) -->
+
+<!-- predict(fit_model_quad) -->
+
+<!-- fitMeasures(fit_model_quad, c("aic", "bic")) -->
+<!-- ``` -->
+
+<!-- ### rel model -->
+
+<!-- ```{r rel model} -->
+
+<!-- ##### RUNNING RELATIVE MODEL ##### -->
+<!-- model_rel <- ' # Measurement model: -->
+<!--                 i =~ 1*pub1 + 1*pub2 + 1*pub3 + 1*pub4 + 1*pub5 -->
+<!--                 s =~ 0*pub1 + pub2 + pub3 + pub4 + pub5 ' -->
+
+<!-- fit_model_rel <- growth(model_rel, data = puberty_wide, missing = "ML") -->
+
+<!-- summary(fit_model_rel) -->
+
+<!-- ## extracting the slopes  -->
+
+<!-- rel_pred <- predict(fit_model_rel) -->
+
+<!-- fitMeasures(fit_model_rel, c("aic", "bic")) -->
+
+<!-- ``` -->
 
