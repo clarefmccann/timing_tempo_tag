@@ -1,0 +1,152 @@
+---
+title: "exploring tag hormone data"
+author: "cfm"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    highlight: tango
+    theme: united
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+---
+
+### setting up markdown {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+
+options(scipen=999)
+```
+
+### loading required packages
+
+```{r load Required Packages, message=FALSE, warning=FALSE, include=FALSE}
+# load packages
+library(pacman)
+pacman::p_load(dplyr, lme4, nlme, readxl, ggplot2, tidyr, lubridate, psych, install = TRUE)
+```
+
+### setting root path
+
+```{r root path}
+
+cas_dir = "/Volumes/psych-cog/dsnlab/TAG/"
+proj_root = "/Volumes/psych-cog/dsnlab/TAG/projects/immune/"
+data_root = "/Volumes/psych-cog/dsnlab/TAG/behavior/Immune/"
+
+## UPDATE FILE NAMES IF NEEDED
+
+
+
+```
+
+### loading in report data  
+
+```{r loading in data}
+
+# puberty
+pds <- read.csv(paste0(cas_dir, "data/Qualtrics_Output/Long/PDS_AllObs_Chronological.csv")) %>%
+  mutate(tagid=as.factor(tagid),
+         wave=as.factor(wave)) %>%
+  select(tagid, wave, adrenf2, gonadf2, pdss) %>% 
+  rename("adrenal_pdss" = "adrenf2",
+         "gonadal_pdss" = "gonadf2")
+
+# age 
+age <- read.csv(paste0(cas_dir, "data/Demographics/allwaves_age_long_06.13.2025.csv")) 
+
+
+######## HORMONES #############
+be_w1w2_hormones <- read.csv(paste0(cas_dir, "data/Puberty/Saliva/TAG_W1W2_Saliva_basalestimates.csv")) %>% 
+  pivot_longer(2:3, names_to = "hormone_w1", values_to = "level_w1") %>% 
+  pivot_longer(9:11, names_to = "hormone_w2", values_to = "level_w2") %>% 
+  select(SID, hormone_w1, level_w1, hormone_w2, level_w2) %>% 
+  separate(hormone_w1, into = c("hormone_w1", "wave_w1"), sep = "_(?=wave)") %>%
+  separate(hormone_w2, into = c("hormone_w2", "wave_w2"), sep = "_(?=wave)") %>% 
+  pivot_longer(
+    cols = c(hormone_w1, wave_w1, level_w1, hormone_w2, wave_w2, level_w2),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(.*)_(w[12])"
+  ) %>% 
+  distinct() %>% 
+  select(SID, wave, hormone, level) %>% 
+  mutate(SID = sprintf("TAG_%03d", SID),
+         hormone = ifelse(hormone == "TESTmean", "testosterone_mean",
+                          ifelse(hormone == "ESTmean", "estradiol_mean",
+                                 ifelse(hormone == "DHEAmean", "DHEA_mean",
+                                 hormone)))) %>% 
+  rename("tagid" = "SID")
+
+be_w3_hormones <- read.csv(paste0("/Volumes/psych-cog/dsnlab/cjm/hormones_wm/hormone_cleaning/W3_basal_estimates_flux.csv")) %>% 
+  pivot_longer(2:4, names_to = "hormone", values_to = "level") %>% 
+  select(tagid, hormone, level) %>% 
+  mutate(wave = "wave3")
+
+be_w4_hormones <- read.csv(paste0("/Volumes/psych-cog/dsnlab/cjm/hormones_wm/hormone_cleaning/W4_basal_estimates_flux.csv")) %>% 
+  pivot_longer(2:4, names_to = "hormone", values_to = "level") %>% 
+  select(tagid, hormone, level) %>% 
+  mutate(wave = "wave4")
+
+be_w5_hormones <- read.csv(paste0("/Volumes/psych-cog/dsnlab/cjm/hormones_wm/hormone_cleaning/W5_basal_estimates_flux.csv")) %>% 
+  pivot_longer(2:4, names_to = "hormone", values_to = "level") %>% 
+  select(tagid, hormone, level) %>% 
+  mutate(wave = "wave5")
+
+#c_sos_hormones <- read.csv(paste0(cas_dir, "behavior/SOS/saliva/Cleaned_datasets/SOS_hormones_cleaned.csv"))
+
+be_hormones <- full_join(be_w1w2_hormones, full_join(be_w3_hormones, full_join(be_w4_hormones, be_w5_hormones)))
+
+age <- age %>% 
+  mutate(
+    tagid = sub("^(TAG)(\\d+)", "TAG_\\2", tagid),
+    wave = ifelse(wave == 1, "wave1",
+           ifelse(wave == 2, "wave2",
+           ifelse(wave == 3, "wave3",
+           ifelse(wave == 4, "wave4",
+           ifelse(wave == 5, "wave5", wave)))))
+  )
+
+pds <- pds %>% 
+  mutate(
+    tagid = sub("^(TAG)(\\d+)", "TAG_\\2", tagid),
+    wave = ifelse(wave == 1, "wave1",
+           ifelse(wave == 2, "wave2",
+           ifelse(wave == 3, "wave3",
+           ifelse(wave == 4, "wave4",
+           ifelse(wave == 5, "wave5", wave)))))
+  )
+
+be_hormones <- left_join(be_hormones, age, by = c("tagid", "wave"))
+be_hormones <- left_join(be_hormones, pds, by = c("tagid", "wave"))
+
+```
+
+
+```{r visualizing hormone trajectories}
+
+
+be_hormones$wave <- factor(be_hormones$wave, levels = paste0("wave", 1:5)) 
+
+ggplot(be_hormones, aes(x = pdss, y = level, group = tagid, color = tagid)) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 1.5) +
+  geom_smooth(aes(group = 1), color = "black", se = FALSE, method = "loess", size = 1.2) +
+  facet_wrap(~ hormone) +
+  labs(title = "hormone trajectories",
+       x = "pds",
+       y = "levels (means)") +
+  theme_minimal() +
+  theme(legend.position = "none") 
+
+
+```
