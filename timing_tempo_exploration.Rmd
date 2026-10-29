@@ -1,0 +1,1765 @@
+---
+title: "TAG puberty: data exploration"
+author: "cfm"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    highlight: tango
+    theme: united
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+params:
+  cas_dir: !r Sys.getenv("CAS_DIR")
+  pds_file: "PDS_AllObs_Chronological.csv"
+  pbip_file: "PBIP_AllObs_Chronological.csv"
+  age_file: "sample_ages_13feb26.csv"
+  dob_file: "Age/TAG_DOB_SessionDates.csv"
+  roster_file: "TAGfinal174.csv"
+  waves: !r 1:6
+  interim_visits: !r c("SOS", "ACE1")
+  include_tag2: FALSE
+---
+
+Exploration only: no models are fit here. The document covers
+
+1. item and summary scores across waves,
+2. pubertal status (PDS) vs. stage (PBIP) within youth,
+3. caregiver–youth concordance,
+4. backward (decreasing) trajectories, and
+5. missing data patterns.
+
+Youth report both **status** (PDS) and **stage** (PBIP drawings); caregivers report **status** (PDS) only.
+
+**Visits.** Core waves (`params$waves`) are combined with the youth-only interim visits
+(`params$interim_visits`):
+
+- **SOS:** the "Wave 2.5" visit, usually between W2 and W3.
+- **ACE1:** first visit from 2020-04, usually between W3 and W4, sometimes between W2 and W3.
+
+Interim visits are included wherever youth data are used: descriptives, age trajectories, status
+vs. stage, and backward trajectories. In trajectories, visits are ordered by age at the visit, not
+by wave number. There's no caregiver report at interim visits, so caregiver–youth concordance and the
+wave-based missing data grid use core waves only. In by-visit plots, interim visits sit at their usual
+chronological position (W1, W2, SOS, W3, ACE1, W4, …).
+The sample is the TAG1 final roster (`TAGfinal174.csv`, N = 174). TAG2 participants (TAG300+) are
+excluded unless `params$include_tag2` is `TRUE`.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  comment = "",
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 5.5,
+  dpi = 120
+)
+
+options(scipen = 999)
+
+# render in UTF-8 so symbols (±, –, ≥, ×) in plot text don't print as <U+...> escapes
+invisible(Sys.setlocale("LC_CTYPE", "en_US.UTF-8"))
+```
+
+# setup
+
+```{r packages}
+library(pacman)
+pacman::p_load(dplyr, tidyr, ggplot2, DT, knitr, kableExtra, install = TRUE)
+# psych is only called with psych:: so it doesn't mask ggplot2::alpha
+if (!requireNamespace("psych", quietly = TRUE)) install.packages("psych")
+
+set.seed(90025)
+```
+
+```{r palette and helpers}
+sunset_anchors <- c(
+  slate = "#335C67",
+  cream = "#FFF3B0",
+  honey = "#E09F3E",
+  brick = "#9E2A2B",
+  bordeaux = "#540B0E"
+)
+
+# youth PDS / caregiver PDS / youth PBIP -- color always paired with shape
+series_levels <- c("Youth PDS", "Caregiver PDS", "Youth PBIP")
+pal_series <- setNames(unname(sunset_anchors[c("slate", "brick", "honey")]), series_levels)
+shape_series <- setNames(c(16, 17, 15), series_levels)
+linetype_series <- setNames(c("solid", "dashed", "dotted"), series_levels)
+
+pal_reporter <- c(Youth = "#335C67", Caregiver = "#9E2A2B")
+
+# ordinal response categories (light -> dark)
+pal_categories <- function(n) {
+  colorRampPalette(c("#d0e9f7", "#74b9d4", "#2980b9", "#1a5276", "#0b2545"))(n)
+}
+
+theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+)
+
+show_table <- function(x, digits = 2, page_length = 10, ...) {
+  x <- x %>% mutate(across(where(is.double), ~ round(.x, digits)))
+  DT::datatable(
+    x,
+    rownames = FALSE,
+    filter = "top",
+    options = list(pageLength = page_length, scrollX = TRUE),
+    ...
+  )
+}
+
+show_kable <- function(x, digits = 2, caption = NULL) {
+  x %>%
+    mutate(across(where(is.double), ~ round(.x, digits))) %>%
+    kable(caption = caption) %>%
+    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+
+se <- function(x) sd(x, na.rm = TRUE) / sqrt(sum(!is.na(x)))
+```
+
+## item metadata
+
+In the TAG files, `peta`–`petd`, `pete` and `fpete` are exact copies of the raw `PDS_F1`–`PDS_F6`. The
+converted items used for scoring are `petaf`–`petdf` and `petef`, on a 1–5 scale with skipped values.
+Item-level analyses below use the **raw** items; summary scores are the lab-scored `adrenf2` / `gonadf2`
+/ `pdss`.
+
+| variable | content | response scale |
+|---|---|---|
+| `peta` | height growth | 1–4 |
+| `petb` | body hair (underarm and pubic) | 1–4 |
+| `petc` | skin changes | 1–4 |
+| `petd` | breast growth | 1–4 |
+| `pete` | development relative to peers (*not scored*) | 1 = much earlier – 5 = much later |
+| `fpete` | menarche | 0 = no, 1 = yes |
+| `petaf`, `petbf`, `petcf`, `petdf`, `petef` | converted items (not used directly here) | height 1/2/3/5; hair, skin 1/2/4/5; breasts 1/3/4/5; menarche 1/5 |
+| `pdss`, `adrenf2`, `gonadf2` | PDSS total / adrenal / gonadal (Shirtcliff et al., 2009), scored from the converted items | 1–5 |
+| `PBIP_1A` / `PBIP_1B` | breast drawings, closest / next closest | 1–5 |
+| `PBIP_2A` / `PBIP_2B` | pubic hair drawings, closest / next closest | 1–5 |
+| `stage` | PBIP stage, mean of `PBIP_1A` and `PBIP_2A` | 1–5 |
+
+```{r item metadata}
+pds_items <- c(peta = "height growth", petb = "body hair", petc = "skin changes", petd = "breast growth")
+pds_relative <- c(pete = "relative timing")
+pds_menarche <- c(fpete = "menarche")
+pds_scores <- c(pdss = "PDSS total", adrenf2 = "PDSS adrenal", gonadf2 = "PDSS gonadal")
+pbip_items <- c(
+  PBIP_1A = "breasts (closest)",
+  PBIP_1B = "breasts (next closest)",
+  PBIP_2A = "pubic hair (closest)",
+  PBIP_2B = "pubic hair (next closest)"
+)
+pbip_scores <- c(stage = "PBIP stage")
+
+# converted items (Shirtcliff scoring inputs); raw -> converted maps below
+pds_converted <- c(
+  petaf = "height growth (conv.)",
+  petbf = "body hair (conv.)",
+  petcf = "skin changes (conv.)",
+  petdf = "breast growth (conv.)",
+  petef = "menarche (conv.)"
+)
+converted_map <- list(
+  petaf = c(peta = "", `1` = 1, `2` = 2, `3` = 3, `4` = 5),
+  petbf = c(petb = "", `1` = 1, `2` = 2, `3` = 4, `4` = 5),
+  petcf = c(petc = "", `1` = 1, `2` = 2, `3` = 4, `4` = 5),
+  petdf = c(petd = "", `1` = 1, `2` = 3, `3` = 4, `4` = 5),
+  petef = c(fpete = "", `0` = 1, `1` = 5)
+)
+# first element names the raw source item; the rest map raw value -> converted value
+converted_source <- sapply(converted_map, function(m) names(m)[1])
+converted_levels <- lapply(converted_map, function(m) sort(unique(as.numeric(m[-1]))))
+
+var_labels <- c(pds_items, pds_relative, pds_menarche, pds_converted, pds_scores, pbip_items, pbip_scores)
+pds_cols <- names(c(pds_items, pds_relative, pds_menarche, pds_converted, pds_scores))
+
+# codebook response options; anything else is recoded to NA (and logged)
+valid_values <- c(
+  lapply(pds_items, function(x) 1:4),
+  list(pete = 1:5, fpete = 0:1),
+  converted_levels,
+  lapply(pbip_items, function(x) 1:5)
+)
+
+# domain pairings used for status vs. stage and summary score comparisons
+score_map <- tribble(
+  ~var,      ~domain,   ~measure,
+  "pdss",    "Total",   "PDS",
+  "adrenf2", "Adrenal", "PDS",
+  "gonadf2", "Gonadal", "PDS",
+  "stage",   "Total",   "PBIP",
+  "PBIP_2A", "Adrenal", "PBIP",
+  "PBIP_1A", "Gonadal", "PBIP"
+)
+domain_levels <- c("Total", "Adrenal", "Gonadal")
+```
+
+# data
+
+```{r paths}
+data_root <- file.path(params$cas_dir, "TAG/data/Qualtrics_Output")
+waves <- as.character(params$waves)
+interim_visits <- as.character(params$interim_visits)
+visits <- c(waves, interim_visits)
+
+# display order: each interim visit sits after the core wave it usually follows.
+# Trajectories don't use this -- they order visits by age.
+interim_after <- c(SOS = "2", ACE1 = "3")
+visit_levels <- unlist(lapply(waves, function(w) {
+  c(w, intersect(names(interim_after)[interim_after == w], interim_visits))
+}))
+visit_labels <- setNames(ifelse(visit_levels %in% waves, paste0("W", visit_levels), visit_levels), visit_levels)
+
+if (!dir.exists(data_root)) {
+  stop("Cannot find ", data_root, " -- is CAS_DIR set and the server mounted?")
+}
+```
+
+```{r load data}
+read_tag <- function(path, cols) {
+  read.csv(path, stringsAsFactors = FALSE) %>%
+    mutate(
+      tagid = as.character(tagid),
+      wave = as.character(wave),
+      survey_name = as.character(survey_name),
+      survey_date = as.Date(as.character(survey_date)),
+      across(any_of(cols), ~ suppressWarnings(as.numeric(.x)))
+    ) %>%
+    filter(!is.na(tagid), tagid != "", wave %in% visits)
+}
+
+## youth PDS (long file, all cohorts, core + interim visits)
+youth_pds <- read_tag(file.path(data_root, "Long", params$pds_file), pds_cols) %>%
+  select(tagid, wave, survey_name, survey_date, all_of(pds_cols)) %>%
+  mutate(reporter = "Youth")
+
+## caregiver PDS: one file per wave (+ TAG2 files); wave comes from the file name
+caregiver_files <- unlist(lapply(waves, function(w) {
+  Sys.glob(file.path(data_root, paste0("Wave", w), paste0("PDS_parent_Wave", w, "*.csv")))
+}))
+
+caregiver_pds <- bind_rows(lapply(caregiver_files, function(f) {
+  read.csv(f, stringsAsFactors = FALSE) %>%
+    mutate(wave = sub("^PDS_parent_Wave([0-9]+).*$", "\\1", basename(f)))
+})) %>%
+  mutate(
+    tagid = as.character(tagid),
+    survey_name = as.character(survey_name),
+    survey_date = as.Date(as.character(survey_date)),
+    across(all_of(pds_cols), ~ suppressWarnings(as.numeric(.x)))
+  ) %>%
+  filter(!is.na(tagid), tagid != "", wave %in% waves) %>%
+  select(tagid, wave, survey_name, survey_date, all_of(pds_cols)) %>%
+  mutate(reporter = "Caregiver")
+
+## youth PBIP
+pbip <- read_tag(
+  file.path(data_root, "Long", params$pbip_file),
+  c(names(pbip_items), "stage")
+) %>%
+  select(tagid, wave, survey_name, survey_date, all_of(names(pbip_items)), stage)
+
+## age: session 2 age for core waves, sos_age for SOS (both from the lab age file).
+## ACE1 has no column there, so it (and any missing s2 age) falls back to
+## (survey_date - DOB); age_source records which was used
+age_file <- read.csv(file.path(params$cas_dir, "TAG/data/Demographics", params$age_file)) %>%
+  select(tagid, matches("^w[0-9]+s2_age$"), any_of("sos_age")) %>%
+  pivot_longer(-tagid, names_to = "wave", values_to = "age_file") %>%
+  mutate(wave = ifelse(wave == "sos_age", "SOS", sub("^w([0-9]+)s2_age$", "\\1", wave))) %>%
+  filter(wave %in% visits, !is.na(age_file))
+
+dob <- read.csv(file.path(params$cas_dir, "TAG/data/Demographics", params$dob_file)) %>%
+  transmute(tagid = as.character(tagid), dob = as.Date(dob, format = "%m/%d/%y")) %>%
+  filter(!is.na(dob)) %>%
+  distinct(tagid, .keep_all = TRUE)
+
+# cohort by ID number (TAG2 = TAG300+). survey_name can't be used: some TAG1
+# participants (e.g., TAG001) completed W5 on the "TAG2 W1 in-lab" survey version
+is_tag2 <- function(id) {
+  (suppressWarnings(as.integer(sub("^TAG", "", id))) >= 300) %in% TRUE
+}
+
+# TAG1 = final enrolled roster (174); drops caregiver-only IDs from screening.
+# TAG2 has no roster file yet, so it's all TAG300+ IDs when included
+tag1_roster <- read.csv(file.path(params$cas_dir, "TAG/data/Overview", params$roster_file))$tagid
+keep_id <- function(id) id %in% tag1_roster | (params$include_tag2 & is_tag2(id))
+
+loaded_ids <- unique(c(youth_pds$tagid, caregiver_pds$tagid, pbip$tagid))
+dropped_ids <- loaded_ids[!keep_id(loaded_ids)]
+
+youth_pds <- youth_pds %>% filter(keep_id(tagid))
+caregiver_pds <- caregiver_pds %>% filter(keep_id(tagid))
+pbip <- pbip %>% filter(keep_id(tagid))
+
+cat(
+  "TAG1 roster:", length(tag1_roster), "| TAG2 included:", params$include_tag2,
+  "| non-roster TAG1 IDs dropped:", sum(!is_tag2(dropped_ids)),
+  paste0("(", paste(dropped_ids[!is_tag2(dropped_ids)], collapse = ", "), ")\n")
+)
+
+cat("Caregiver files read:", paste(basename(caregiver_files), collapse = ", "), "\n")
+```
+
+## data checks
+
+*Any duplicated participant × visit rows would be listed here; a "none" message means each person has at most one survey per source per visit.*
+
+```{r duplicates}
+dups <- bind_rows(
+  youth_pds %>% count(tagid, wave) %>% mutate(source = "Youth PDS"),
+  caregiver_pds %>% count(tagid, wave) %>% mutate(source = "Caregiver PDS"),
+  pbip %>% count(tagid, wave) %>% mutate(source = "Youth PBIP")
+) %>%
+  filter(n > 1)
+
+if (nrow(dups) > 0) {
+  warning(nrow(dups), " duplicated tagid x wave rows; keeping the first of each")
+  show_kable(dups, caption = "Duplicated tagid × wave rows")
+} else {
+  cat("No duplicated tagid x wave rows in any source.\n")
+}
+
+youth_pds <- youth_pds %>% distinct(tagid, wave, .keep_all = TRUE)
+caregiver_pds <- caregiver_pds %>% distinct(tagid, wave, .keep_all = TRUE)
+pbip <- pbip %>% distinct(tagid, wave, .keep_all = TRUE)
+```
+
+The next check confirms that every converted item follows the expected raw → converted map. A raw value
+that isn't on the map (e.g., `petd` = 5) should convert to `NA`.
+
+*Each row counts one raw → converted value pair, and every row should show `matches = TRUE`; the line under the table gives the total mismatches, which should be 0.*
+
+```{r converted item check}
+check_conversion <- function(df, source) {
+  bind_rows(lapply(names(converted_map), function(conv) {
+    raw <- converted_source[[conv]]
+    m <- converted_map[[conv]][-1]
+    df %>%
+      transmute(
+        source = source,
+        tagid, wave,
+        item = conv,
+        raw_value = .data[[raw]],
+        converted = .data[[conv]],
+        expected = suppressWarnings(as.numeric(m[as.character(raw_value)]))
+      )
+  })) %>%
+    mutate(matches = (is.na(converted) & is.na(expected)) | (converted %in% expected & !is.na(expected)))
+}
+
+conversion <- bind_rows(
+  check_conversion(youth_pds, "Youth PDS"),
+  check_conversion(caregiver_pds, "Caregiver PDS")
+)
+
+conversion %>%
+  count(source, item, raw_value, converted, matches) %>%
+  arrange(source, item, raw_value) %>%
+  show_table(page_length = 15)
+
+cat(
+  "Rows not matching the expected conversion map:", sum(!conversion$matches), "of",
+  nrow(conversion), "\n"
+)
+```
+
+Raw responses outside the codebook options (e.g., `petd` = 5 on the 1–4 raw scale) are set to `NA`
+below. Upstream summary scores (`pdss`, `adrenf2`, `gonadf2`, `stage`) are left as scored by the lab
+pipeline. The pipeline already converts these codes to `petdf` / `petef` = `NA`, so `gonadf2` and
+`pdss` are missing for those rows.
+
+*Each row is a raw response that isn't a codebook option and was set to `NA` for item-level analyses.*
+
+```{r out of range recode}
+recode_out_of_range <- function(df, source) {
+  vars <- intersect(names(valid_values), names(df))
+  log <- bind_rows(lapply(vars, function(v) {
+    df %>%
+      filter(!is.na(.data[[v]]), !.data[[v]] %in% valid_values[[v]]) %>%
+      transmute(source = source, tagid, wave, survey_name, item = v, value = .data[[v]])
+  }))
+  for (v in vars) {
+    df[[v]][!df[[v]] %in% valid_values[[v]]] <- NA
+  }
+  list(df = df, log = log)
+}
+
+rc_youth <- recode_out_of_range(youth_pds, "Youth PDS")
+rc_caregiver <- recode_out_of_range(caregiver_pds, "Caregiver PDS")
+rc_pbip <- recode_out_of_range(pbip, "Youth PBIP")
+
+youth_pds <- rc_youth$df
+caregiver_pds <- rc_caregiver$df
+pbip <- rc_pbip$df
+
+out_of_range <- bind_rows(rc_youth$log, rc_caregiver$log, rc_pbip$log)
+if (nrow(out_of_range) > 0) {
+  show_kable(out_of_range, caption = "Out-of-range responses recoded to NA")
+} else {
+  cat("No out-of-range responses.\n")
+}
+```
+
+*If the two counts match, PBIP `stage` is exactly the mean of the two "closest" drawings in every row.*
+
+```{r stage check}
+stage_check <- pbip %>%
+  filter(!is.na(stage), !is.na(PBIP_1A), !is.na(PBIP_2A)) %>%
+  mutate(stage_rebuilt = (PBIP_1A + PBIP_2A) / 2)
+
+cat(
+  "PBIP stage equals mean(PBIP_1A, PBIP_2A) in",
+  sum(abs(stage_check$stage - stage_check$stage_rebuilt) < 1e-8), "of",
+  nrow(stage_check), "rows with both items.\n"
+)
+```
+
+## analysis tables
+
+```{r build analysis tables}
+all_ids <- unique(c(youth_pds$tagid, caregiver_pds$tagid, pbip$tagid))
+tag2_ids <- all_ids[is_tag2(all_ids)]
+
+# one row per tagid x visit: date and age, shared by every source at that visit.
+# The date comes from youth PDS, then PBIP, then caregiver PDS
+visit_info <- bind_rows(
+  youth_pds %>% select(tagid, wave, survey_date) %>% mutate(priority = 1),
+  pbip %>% select(tagid, wave, survey_date) %>% mutate(priority = 2),
+  caregiver_pds %>% select(tagid, wave, survey_date) %>% mutate(priority = 3)
+) %>%
+  arrange(tagid, wave, is.na(survey_date), priority) %>%
+  distinct(tagid, wave, .keep_all = TRUE) %>%
+  select(tagid, wave, visit_date = survey_date) %>%
+  left_join(age_file, by = c("tagid", "wave")) %>%
+  left_join(dob, by = "tagid") %>%
+  mutate(
+    age_dob = as.numeric(visit_date - dob) / 365.25,
+    age = coalesce(age_file, age_dob),
+    age_source = case_when(
+      !is.na(age_file) ~ "age file",
+      !is.na(age_dob) ~ "survey date - DOB",
+      TRUE ~ "missing"
+    )
+  ) %>%
+  select(tagid, wave, visit_date, age, age_source)
+
+add_ids <- function(df) {
+  df %>%
+    left_join(visit_info, by = c("tagid", "wave")) %>%
+    mutate(
+      visit = factor(visit_labels[wave], levels = visit_labels),
+      visit_type = ifelse(wave %in% waves, "core", "interim"),
+      wave_num = suppressWarnings(as.integer(wave)),
+      cohort = ifelse(tagid %in% tag2_ids, "TAG2", "TAG1")
+    )
+}
+
+pds_long <- bind_rows(youth_pds, caregiver_pds) %>%
+  add_ids() %>%
+  mutate(reporter = factor(reporter, levels = c("Youth", "Caregiver")))
+
+pbip <- add_ids(pbip)
+
+# one row per tagid x wave: PDS scores by reporter + PBIP
+scores_wide <- full_join(
+  pds_long %>%
+    select(tagid, wave, reporter, all_of(names(pds_scores))) %>%
+    pivot_wider(names_from = reporter, values_from = all_of(names(pds_scores))),
+  pbip %>% select(tagid, wave, stage, PBIP_1A, PBIP_2A),
+  by = c("tagid", "wave")
+) %>%
+  add_ids()
+
+# long summary scores, labeled by series (reporter x measure) and domain
+scores_long <- bind_rows(
+  pds_long %>%
+    mutate(series = paste(reporter, "PDS")) %>%
+    select(tagid, visit, visit_type, wave_num, age, cohort, series, all_of(names(pds_scores))) %>%
+    pivot_longer(all_of(names(pds_scores)), names_to = "var"),
+  pbip %>%
+    mutate(series = "Youth PBIP") %>%
+    select(tagid, visit, visit_type, wave_num, age, cohort, series, stage, PBIP_1A, PBIP_2A) %>%
+    pivot_longer(c(stage, PBIP_1A, PBIP_2A), names_to = "var")
+) %>%
+  filter(!is.na(value)) %>%
+  left_join(score_map, by = "var") %>%
+  mutate(
+    series = factor(series, levels = series_levels),
+    domain = factor(domain, levels = domain_levels)
+  )
+```
+
+# sample overview
+
+*Each cell is the number of participants with that survey at that visit; caregiver cells at SOS and ACE1 are 0 because caregivers weren't surveyed at interim visits.*
+
+```{r sample by wave}
+sources <- bind_rows(
+  youth_pds %>% distinct(tagid, wave) %>% mutate(source = "Youth PDS"),
+  caregiver_pds %>% distinct(tagid, wave) %>% mutate(source = "Caregiver PDS"),
+  pbip %>% distinct(tagid, wave) %>% mutate(source = "Youth PBIP")
+) %>%
+  mutate(
+    source = factor(source, levels = series_levels),
+    cohort = ifelse(tagid %in% tag2_ids, "TAG2", "TAG1"),
+    visit = factor(visit_labels[wave], levels = visit_labels),
+    visit_type = ifelse(wave %in% waves, "core", "interim")
+  )
+
+sources %>%
+  count(cohort, source, visit) %>%
+  pivot_wider(names_from = visit, values_from = n, values_fill = 0) %>%
+  arrange(cohort, source) %>%
+  show_kable(caption = "Participants with a completed survey, by cohort, source, and visit (interim visits are youth only)")
+
+cat(
+  "Unique participants in any source:", n_distinct(sources$tagid),
+  "(TAG1 =", n_distinct(sources$tagid[sources$cohort == "TAG1"]),
+  ", TAG2 =", n_distinct(sources$tagid[sources$cohort == "TAG2"]), ")\n"
+)
+```
+
+*This table shows where each visit's age came from: the lab age file where available, otherwise survey date minus date of birth (all ACE1 ages use the second).*
+
+```{r age by wave}
+age_by_wave <- visit_info %>%
+  mutate(
+    cohort = ifelse(tagid %in% tag2_ids, "TAG2", "TAG1"),
+    visit = factor(visit_labels[wave], levels = visit_labels)
+  )
+
+age_by_wave %>%
+  count(visit, age_source) %>%
+  pivot_wider(names_from = age_source, values_from = n, values_fill = 0) %>%
+  show_kable(caption = "Source of age at each visit (age file = session 2 age, or sos_age for SOS)")
+```
+
+*These are the mean, SD and range of age at each visit; interim visits should fall between the core waves on either side of them.*
+
+```{r age summary}
+age_by_wave %>%
+  filter(!is.na(age)) %>%
+  group_by(cohort, visit) %>%
+  summarise(
+    n = n(), mean = mean(age), sd = sd(age), min = min(age), max = max(age),
+    .groups = "drop"
+  ) %>%
+  show_kable(caption = "Age (years) by cohort and visit")
+```
+
+*Each box shows the age spread at a visit (points are individual participants); boxes that overlap mean people of quite different ages share a visit label, which is why trajectories are ordered by age rather than by visit.*
+
+```{r age plot, fig.height=4.5}
+ggplot(age_by_wave %>% filter(!is.na(age)), aes(x = visit, y = age, color = cohort, shape = cohort)) +
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.8), width = 0.6) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.4, size = 1.2) +
+  scale_color_manual(values = unname(pal_reporter)) +
+  labs(title = "Age at each visit", x = "Visit", y = "Age (years)", color = NULL, shape = NULL)
+```
+
+# item and summary scores across visits
+
+## PDS items
+
+*There is one row per item × reporter × visit: a rising `mean` across visits reflects development, and `pct_missing` shows item nonresponse.*
+
+```{r pds item descriptives}
+describe_by_wave <- function(df, vars, group_vars) {
+  df %>%
+    select(all_of(group_vars), visit, all_of(vars)) %>%
+    pivot_longer(all_of(vars), names_to = "var", values_to = "value") %>%
+    group_by(across(all_of(group_vars)), var, visit) %>%
+    summarise(
+      n_surveys = n(),
+      n_valid = sum(!is.na(value)),
+      pct_missing = 100 * mean(is.na(value)),
+      mean = mean(value, na.rm = TRUE),
+      sd = sd(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(label = var_labels[var], .after = var)
+}
+
+pds_item_desc <- describe_by_wave(
+  pds_long,
+  names(c(pds_items, pds_relative, pds_menarche)),
+  "reporter"
+)
+show_table(pds_item_desc)
+```
+
+The stacked bars show the full response distribution, which carries more information than the mean for
+4-point items.
+
+*Darker segments mean more advanced development, so bars should darken from left to right; caregiver SOS and ACE1 columns are empty by design because caregivers weren't surveyed at interim visits.*
+
+```{r pds item distributions, fig.height=9}
+plot_distribution <- function(df, vars, levels, facet, title) {
+  df %>%
+    select(any_of(c("reporter", "visit")), all_of(vars)) %>%
+    pivot_longer(all_of(vars), names_to = "var", values_to = "value") %>%
+    filter(!is.na(value)) %>%
+    mutate(
+      value = factor(value, levels = levels),
+      label = factor(var_labels[var], levels = var_labels[vars])
+    ) %>%
+    ggplot(aes(x = visit, fill = value)) +
+    geom_bar(position = "fill", width = 0.85) +
+    facet +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = pal_categories(length(levels)), drop = FALSE) +
+    labs(title = title, x = "Visit", y = "% of responses", fill = "Response")
+}
+
+plot_distribution(
+  pds_long, names(pds_items), 1:4,
+  facet_grid(label ~ reporter),
+  "PDS item response distributions by visit"
+)
+```
+
+*Lighter colors mean "earlier than peers" and darker colors "later than peers"; because this item is relative rather than developmental, the distribution should stay fairly stable across visits.*
+
+```{r pds relative timing, fig.height=4}
+plot_distribution(
+  pds_long, names(pds_relative), 1:5,
+  facet_grid(. ~ reporter),
+  "Development relative to peers (1 = much earlier, 5 = much later)"
+)
+```
+
+*Each line is the percentage of a reporter's responses saying menarche has occurred (labels give n), and the youth and caregiver lines should nearly overlap.*
+
+```{r menarche by visit, fig.height=4.5}
+menarche_desc <- pds_item_desc %>%
+  filter(var == "fpete") %>%
+  mutate(pct_yes = 100 * mean)
+
+ggplot(menarche_desc, aes(x = visit, y = pct_yes, color = reporter, shape = reporter, group = reporter)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_text(aes(label = paste0("n=", n_valid)), vjust = -1, size = 3, show.legend = FALSE) +
+  scale_color_manual(values = pal_reporter) +
+  scale_x_discrete() +
+  scale_y_continuous(limits = c(0, 105), labels = function(x) paste0(x, "%")) +
+  labs(title = "% reporting menarche by visit", x = "Visit", y = "% yes", color = NULL, shape = NULL)
+```
+
+## converted PDS items
+
+These are the scoring inputs for `adrenf2` / `gonadf2` / `pdss`. Each raw 1–4 item is stretched onto
+1–5 by skipping one value, and which value is skipped differs by item: height skips 4, body hair and
+skin skip 3, breasts skip 2. Menarche becomes 1/5. Empty categories in the bars below are the skipped
+values. Means on this scale are therefore not comparable with raw-item means, or across items.
+
+*This table has the same layout as the raw-item table, but means are on the 1–5 converted scale, so they can't be compared directly with the raw means above.*
+
+```{r converted item descriptives}
+pds_conv_desc <- describe_by_wave(pds_long, names(pds_converted), "reporter")
+show_table(pds_conv_desc)
+```
+
+*Read these like the raw-item bars: each item has one empty category (its skipped value), and caregiver SOS and ACE1 columns are empty by design.*
+
+```{r converted item distributions, fig.height=10}
+plot_distribution(
+  pds_long, names(pds_converted), 1:5,
+  facet_grid(label ~ reporter),
+  "Converted PDS item distributions by visit (skipped values appear empty)"
+)
+```
+
+*Dotted lines are raw-scale means and solid lines are converted-scale means; the gap between them shows how much the conversion shifts each item, and that shift differs by item.*
+
+```{r converted item means, fig.height=4.5}
+bind_rows(
+  pds_item_desc %>% filter(var %in% names(pds_items)) %>% mutate(scale = "raw (1–4)"),
+  pds_conv_desc %>% filter(var != "petef") %>% mutate(scale = "converted (1–5)")
+) %>%
+  mutate(
+    item = factor(sub(" \\(conv\\.\\)", "", label), levels = pds_items),
+    scale = factor(scale, levels = c("raw (1–4)", "converted (1–5)"))
+  ) %>%
+  ggplot(aes(x = visit, y = mean, color = reporter, shape = reporter, linetype = scale, group = interaction(reporter, scale))) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2) +
+  facet_wrap(~item, nrow = 1) +
+  scale_color_manual(values = pal_reporter) +
+  scale_linetype_manual(values = c("dotted", "solid")) +
+  scale_x_discrete() +
+  coord_cartesian(ylim = c(1, 5)) +
+  labs(
+    title = "Item means by visit: raw vs. converted scale",
+    subtitle = "The conversion shifts each item's mean differently, depending on which value is skipped",
+    x = "Visit", y = "Mean", color = NULL, shape = NULL, linetype = NULL
+  )
+```
+
+## PBIP items (youth only)
+
+*There is one row per drawing × visit; the "closest" (A) drawings are used for scoring, and the "next closest" (B) drawings are shown for completeness.*
+
+```{r pbip item descriptives}
+pbip_item_desc <- describe_by_wave(pbip %>% mutate(reporter = "Youth"), names(pbip_items), "reporter")
+show_table(pbip_item_desc)
+```
+
+*Darker segments are more advanced drawings (stages 4–5), so bars should darken across visits.*
+
+```{r pbip item distributions, fig.height=7}
+plot_distribution(
+  pbip, names(pbip_items), 1:5,
+  facet_wrap(~label, ncol = 2),
+  "PBIP drawing selections by visit (youth)"
+)
+```
+
+## summary scores
+
+Columns are reporter × measure; rows are domains. PBIP's domain scores are the "closest" drawings
+(`PBIP_2A` = adrenal / pubic hair, `PBIP_1A` = gonadal / breasts).
+
+*There is one row per series × domain × visit; means approaching 5 signal a ceiling, which leaves little room to detect further change at later visits.*
+
+```{r summary score descriptives}
+score_desc <- scores_long %>%
+  group_by(series, domain, var, visit) %>%
+  summarise(
+    n = n(), mean = mean(value), sd = sd(value), se = se(value),
+    median = median(value), p25 = quantile(value, 0.25), p75 = quantile(value, 0.75),
+    .groups = "drop"
+  )
+show_table(score_desc)
+```
+
+*Lines that track each other mean the three sources agree on average, while a consistent vertical gap means one source rates development higher (ribbons are ±1 SE).*
+
+```{r summary score means, fig.height=4.5}
+ggplot(score_desc, aes(x = visit, y = mean, color = series, shape = series, linetype = series, group = series)) +
+  geom_ribbon(aes(ymin = mean - se, ymax = mean + se, fill = series), alpha = 0.12, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.3) +
+  facet_wrap(~domain, nrow = 1) +
+  scale_color_manual(values = pal_series) +
+  scale_fill_manual(values = pal_series) +
+  scale_shape_manual(values = shape_series) +
+  scale_linetype_manual(values = linetype_series) +
+  scale_x_discrete() +
+  coord_cartesian(ylim = c(1, 5)) +
+  labs(
+    title = "Mean summary scores across visits", subtitle = "Ribbon = ±1 SE",
+    x = "Visit", y = "Score (1–5)", color = NULL, fill = NULL, shape = NULL, linetype = NULL
+  )
+```
+
+*Grey lines are individual participants and the colored curve is the average trend; downward steps in grey lines are the backward transitions examined later.*
+
+```{r summary score by age, fig.height=8}
+ggplot(scores_long %>% filter(!is.na(age)), aes(x = age, y = value)) +
+  geom_line(aes(group = tagid), alpha = 0.12, color = "grey30") +
+  geom_point(alpha = 0.15, size = 0.7, color = "grey30") +
+  geom_smooth(aes(color = series), method = "loess", se = TRUE, linewidth = 1.1, show.legend = FALSE) +
+  facet_grid(domain ~ series) +
+  scale_color_manual(values = pal_series) +
+  coord_cartesian(ylim = c(1, 5)) +
+  labs(title = "Individual trajectories by age", subtitle = "Loess smooth over all observations", x = "Age (years)", y = "Score (1–5)")
+```
+
+# status (PDS) vs. stage (PBIP) within youth
+
+Both measures are on a 1–5 metric, so the report includes absolute agreement (ICC[A,1], mean difference)
+alongside rank-order association (Spearman). `diff` = PDS − PBIP, so positive values mean youth rate
+themselves more advanced on the PDS than on the drawings.
+
+```{r pair helpers}
+pair_stats <- function(x, y) {
+  ok <- !is.na(x) & !is.na(y)
+  x <- x[ok]
+  y <- y[ok]
+  n <- length(x)
+  if (n < 10) {
+    return(tibble(n = n))
+  }
+  icc <- tryCatch(
+    {
+      r <- psych::ICC(cbind(x, y), lmer = FALSE)$results
+      r$ICC[r$type == "ICC2"]
+    },
+    error = function(e) NA_real_
+  )
+  tibble(
+    n = n,
+    spearman = suppressWarnings(cor(x, y, method = "spearman")),
+    icc_a1 = icc,
+    mean_diff = mean(x - y),
+    sd_diff = sd(x - y),
+    pct_within_half = 100 * mean(abs(x - y) <= 0.5),
+    pct_x_higher = 100 * mean(x > y),
+    pct_y_higher = 100 * mean(x < y)
+  )
+}
+
+run_pairs <- function(df, comps) {
+  bind_rows(lapply(seq_len(nrow(comps)), function(i) {
+    cmp <- comps[i, ]
+    by_visit <- df %>%
+      group_by(visit = as.character(visit)) %>%
+      group_modify(~ pair_stats(.x[[cmp$x]], .x[[cmp$y]])) %>%
+      ungroup()
+    pooled <- pair_stats(df[[cmp$x]], df[[cmp$y]]) %>% mutate(visit = "All")
+    bind_rows(by_visit, pooled) %>%
+      mutate(comparison = cmp$comparison, domain = cmp$domain, .before = 1)
+  })) %>%
+    # interim visits have no caregiver report -> no pairs
+    filter(n > 0) %>%
+    mutate(
+      domain = factor(domain, levels = domain_levels),
+      visit = factor(visit, levels = c(visit_labels, "All"))
+    ) %>%
+    arrange(comparison, domain, visit)
+}
+
+comparisons <- tribble(
+  ~comparison,                       ~domain,   ~x,                  ~y,
+  "Youth PDS vs. youth PBIP",        "Total",   "pdss_Youth",        "stage",
+  "Youth PDS vs. youth PBIP",        "Adrenal", "adrenf2_Youth",     "PBIP_2A",
+  "Youth PDS vs. youth PBIP",        "Gonadal", "gonadf2_Youth",     "PBIP_1A",
+  "Youth PDS vs. caregiver PDS",     "Total",   "pdss_Youth",        "pdss_Caregiver",
+  "Youth PDS vs. caregiver PDS",     "Adrenal", "adrenf2_Youth",     "adrenf2_Caregiver",
+  "Youth PDS vs. caregiver PDS",     "Gonadal", "gonadf2_Youth",     "gonadf2_Caregiver",
+  "Caregiver PDS vs. youth PBIP",    "Total",   "pdss_Caregiver",    "stage",
+  "Caregiver PDS vs. youth PBIP",    "Adrenal", "adrenf2_Caregiver", "PBIP_2A",
+  "Caregiver PDS vs. youth PBIP",    "Gonadal", "gonadf2_Caregiver", "PBIP_1A"
+)
+
+pair_results <- run_pairs(scores_wide, comparisons)
+
+# one color per visit, in chronological display order
+pal_visits <- setNames(colorRampPalette(sunset_anchors[-2])(length(visit_labels)), visit_labels)
+
+plot_pair_scatter <- function(df, comps, title, xlab, ylab) {
+  bind_rows(lapply(seq_len(nrow(comps)), function(i) {
+    tibble(
+      domain = comps$domain[i],
+      x = df[[comps$x[i]]],
+      y = df[[comps$y[i]]],
+      visit = df$visit
+    )
+  })) %>%
+    filter(!is.na(x), !is.na(y)) %>%
+    mutate(domain = factor(domain, levels = domain_levels), visit = droplevels(visit)) %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+    geom_count(aes(color = visit), alpha = 0.6, position = position_dodge(width = 0.3)) +
+    facet_wrap(~domain, nrow = 1) +
+    scale_color_manual(values = pal_visits) +
+    scale_size_area(max_size = 6) +
+    coord_equal(xlim = c(1, 5), ylim = c(1, 5)) +
+    labs(title = title, subtitle = "Dashed line = perfect agreement; point size = n", x = xlab, y = ylab, color = "Visit", size = "n")
+}
+```
+
+*`spearman` measures rank-order agreement and `icc_a1` absolute agreement (closer to 1 is better), and `mean_diff` > 0 means youth rate themselves higher on the PDS than on the drawings.*
+
+```{r status vs stage}
+status_stage <- pair_results %>% filter(comparison == "Youth PDS vs. youth PBIP")
+show_table(
+  status_stage %>% rename(pct_pds_higher = pct_x_higher, pct_pbip_higher = pct_y_higher),
+  page_length = 12
+)
+```
+
+*Points on the dashed diagonal are exact agreement, and points below it are observations where the PDS score is higher than the PBIP score.*
+
+```{r status vs stage scatter, fig.height=4.5}
+plot_pair_scatter(
+  scores_wide,
+  comparisons %>% filter(comparison == "Youth PDS vs. youth PBIP"),
+  "Youth status (PDS) vs. stage (PBIP)", "Youth PDS", "Youth PBIP"
+)
+```
+
+# caregiver–youth concordance
+
+Pairs are youth and caregiver reports at the same core wave; interim visits have no caregiver report.
+Pooled ("All") estimates treat person-waves as independent and are descriptive only.
+
+*This is the number of visits at which both youth and caregiver gave a PDSS; agreement estimates at waves with few pairs are unreliable.*
+
+```{r dyad counts}
+dyads <- pds_long %>%
+  filter(visit_type == "core") %>%
+  select(tagid, wave_num, reporter, all_of(pds_cols)) %>%
+  pivot_longer(all_of(pds_cols), names_to = "var", values_to = "value") %>%
+  pivot_wider(names_from = reporter, values_from = value) %>%
+  filter(!is.na(Youth), !is.na(Caregiver))
+
+dyads %>%
+  filter(var == "pdss") %>%
+  count(wave_num, name = "n_dyads") %>%
+  show_kable(caption = "Youth–caregiver pairs with PDSS from both reporters")
+```
+
+## item level
+
+The weighted kappa uses quadratic weights based on the response *values*, not category positions.
+Categories are fixed to the valid levels so that unused categories still count. On the raw items this
+matches standard quadratic weighting. On the converted items, disagreements that cross a skipped value
+(e.g., breasts raw 1 vs. 2 → converted 1 vs. 3) are penalized more. Exact agreement and the share of
+youth- vs. caregiver-higher pairs are identical across scales, because the conversion is one-to-one and
+order-preserving. `pct_youth_higher` > `pct_caregiver_higher` means youth rate themselves more advanced
+than caregivers do.
+
+*Pooled agreement per item: `pct_exact` is the share of identical answers, and `weighted_kappa` corrects for chance (roughly .40–.60 is moderate and above .60 substantial).*
+
+```{r item agreement}
+item_agree <- function(y, c, levels) {
+  k <- tryCatch(
+    suppressWarnings(psych::cohen.kappa(
+      cbind(y, c),
+      w = outer(levels, levels, "-")^2,
+      levels = levels
+    )),
+    error = function(e) NULL
+  )
+  tibble(
+    n = length(y),
+    pct_exact = 100 * mean(y == c),
+    pct_within_1 = 100 * mean(abs(y - c) <= 1),
+    pct_youth_higher = 100 * mean(y > c),
+    pct_caregiver_higher = 100 * mean(y < c),
+    kappa = if (is.null(k)) NA_real_ else k$kappa,
+    weighted_kappa = if (is.null(k)) NA_real_ else k$weighted.kappa
+  )
+}
+
+agree_items <- names(c(pds_items, pds_relative, pds_menarche, pds_converted))
+
+item_agreement <- bind_rows(lapply(agree_items, function(v) {
+  d <- dyads %>% filter(var == v)
+  bind_rows(
+    d %>%
+      group_by(wave = as.character(wave_num)) %>%
+      group_modify(~ item_agree(.x$Youth, .x$Caregiver, valid_values[[v]])) %>%
+      ungroup(),
+    item_agree(d$Youth, d$Caregiver, valid_values[[v]]) %>% mutate(wave = "All")
+  ) %>%
+    mutate(
+      var = v,
+      label = var_labels[v],
+      scale = ifelse(v %in% names(pds_converted), "converted", "raw"),
+      .before = 1
+    )
+}))
+
+show_kable(
+  item_agreement %>% filter(wave == "All") %>% select(-wave),
+  caption = "Item-level agreement, pooled across waves"
+)
+```
+
+*These are the same statistics broken down by wave, so you can see whether agreement changes as participants get older.*
+
+```{r item agreement by wave}
+show_table(item_agreement)
+```
+
+*Lines above the upper dotted line (.60) show substantial agreement and lines below the lower one (.40) weak agreement; comparing the raw and converted panels shows how much the conversion changes kappa.*
+
+```{r item kappa by wave, fig.height=4.5}
+kappa_by_wave <- item_agreement %>%
+  filter(wave != "All", n >= 10) %>%
+  mutate(
+    wave = as.integer(wave),
+    item = sub(" \\(conv\\.\\)", "", label),
+    scale = factor(scale, levels = c("raw", "converted"))
+  )
+
+ggplot(kappa_by_wave, aes(x = wave, y = weighted_kappa, color = item, shape = item, group = item)) +
+  geom_hline(yintercept = c(0.4, 0.6), linetype = "dotted", color = "grey60") +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.3) +
+  facet_wrap(~scale, nrow = 1) +
+  scale_color_manual(values = colorRampPalette(sunset_anchors[-2])(n_distinct(kappa_by_wave$item))) +
+  scale_x_continuous(breaks = params$waves) +
+  labs(
+    title = "Youth–caregiver weighted kappa by wave", subtitle = "Waves with ≥ 10 pairs; dotted lines at .40 and .60",
+    x = "Wave", y = "Weighted kappa (quadratic)", color = NULL, shape = NULL
+  )
+```
+
+*Counts on the diagonal are exact agreement; cells above the diagonal are pairs where the youth reported more development than the caregiver, and cells below are the reverse.*
+
+```{r item crosstabs, fig.height=8}
+dyads %>%
+  filter(var %in% names(c(pds_items, pds_menarche))) %>%
+  count(var, Youth, Caregiver) %>%
+  group_by(var) %>%
+  mutate(pct = 100 * n / sum(n)) %>%
+  ungroup() %>%
+  mutate(label = factor(var_labels[var], levels = var_labels[names(c(pds_items, pds_menarche))])) %>%
+  ggplot(aes(x = factor(Caregiver), y = factor(Youth), fill = pct)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n, color = pct > 25), size = 3.2, show.legend = FALSE) +
+  facet_wrap(~label, scales = "free", ncol = 3) +
+  scale_fill_gradient(low = "#FFF3B0", high = "#540B0E") +
+  scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "white")) +
+  labs(
+    title = "Youth × caregiver response cross-tabs (pooled across waves)",
+    subtitle = "Cell label = n; fill = % of pairs; diagonal = exact agreement",
+    x = "Caregiver", y = "Youth", fill = "% of pairs"
+  )
+```
+
+## summary scores
+
+`diff` = youth − caregiver.
+
+*`spearman` and `icc_a1` near 1 mean strong agreement, and `mean_diff` > 0 means youth rate themselves more advanced than caregivers do.*
+
+```{r score agreement}
+reporter_pairs <- pair_results %>%
+  filter(comparison == "Youth PDS vs. caregiver PDS") %>%
+  rename(pct_youth_higher = pct_x_higher, pct_caregiver_higher = pct_y_higher)
+
+show_kable(
+  reporter_pairs %>% filter(visit == "All") %>% select(-comparison, -visit),
+  caption = "Youth vs. caregiver PDS summary scores, pooled across waves"
+)
+```
+
+*These are the same statistics broken down by wave; estimates for waves with few pairs will be noisy.*
+
+```{r score agreement by wave}
+show_table(reporter_pairs, page_length = 12)
+```
+
+*Points on the dashed diagonal are exact agreement, and points below it are pairs where the youth reported a higher score than the caregiver.*
+
+```{r score agreement scatter, fig.height=4.5}
+plot_pair_scatter(
+  scores_wide,
+  comparisons %>% filter(comparison == "Youth PDS vs. caregiver PDS"),
+  "Youth vs. caregiver PDS", "Youth PDS", "Caregiver PDS"
+)
+```
+
+*Each point is one youth–caregiver pair: the solid line is the average difference (0 = no systematic bias), most points should fall between the dashed limits, and a sloped cloud would mean disagreement depends on developmental level.*
+
+```{r bland altman, fig.height=4.5}
+ba <- bind_rows(lapply(c("pdss", "adrenf2", "gonadf2"), function(v) {
+  tibble(
+    domain = score_map$domain[score_map$var == v],
+    youth = scores_wide[[paste0(v, "_Youth")]],
+    caregiver = scores_wide[[paste0(v, "_Caregiver")]],
+    visit = scores_wide$visit
+  )
+})) %>%
+  filter(!is.na(youth), !is.na(caregiver)) %>%
+  mutate(
+    avg = (youth + caregiver) / 2,
+    diff = youth - caregiver,
+    domain = factor(domain, levels = domain_levels),
+    visit = droplevels(visit)
+  )
+
+ba_lines <- ba %>%
+  group_by(domain) %>%
+  summarise(bias = mean(diff), lo = bias - 1.96 * sd(diff), hi = bias + 1.96 * sd(diff), .groups = "drop")
+
+ggplot(ba, aes(x = avg, y = diff)) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_jitter(aes(color = visit), width = 0.04, height = 0.04, alpha = 0.5, size = 1.4) +
+  geom_hline(data = ba_lines, aes(yintercept = bias), color = "#9E2A2B", linewidth = 0.9) +
+  geom_hline(data = ba_lines, aes(yintercept = lo), color = "#9E2A2B", linetype = "dashed") +
+  geom_hline(data = ba_lines, aes(yintercept = hi), color = "#9E2A2B", linetype = "dashed") +
+  facet_wrap(~domain, nrow = 1) +
+  scale_color_manual(values = pal_visits) +
+  labs(
+    title = "Bland–Altman: youth − caregiver PDS",
+    subtitle = "Solid = mean difference; dashed = 95% limits of agreement",
+    x = "Mean of youth and caregiver", y = "Youth − caregiver", color = "Wave"
+  )
+```
+
+Youth PDS vs. PBIP includes the interim visits; the comparisons involving caregivers are core waves only.
+
+*Higher lines mean stronger rank-order agreement, and dips at particular visits flag times when the sources diverge.*
+
+```{r agreement by wave, fig.height=4.5}
+ggplot(
+  pair_results %>% filter(visit != "All", n >= 10) %>% mutate(visit = droplevels(visit)),
+  aes(x = visit, y = spearman, color = comparison, shape = comparison, group = comparison)
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.3) +
+  facet_wrap(~domain, nrow = 1) +
+  scale_color_manual(values = unname(sunset_anchors[c("honey", "slate", "brick")])) +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(title = "Spearman correlation by visit, all three comparisons", subtitle = "Visits with ≥ 10 pairs", x = "Visit", y = "Spearman rho", color = NULL, shape = NULL) +
+  guides(color = guide_legend(nrow = 1))
+```
+
+## caregiver PDS vs. youth PBIP
+
+This comparison crosses reporter and method. `diff` = caregiver PDS − youth PBIP.
+
+*Read this like the status vs. stage table; `mean_diff` > 0 means the caregiver's PDS is higher than the youth's PBIP.*
+
+```{r caregiver vs pbip}
+show_table(
+  pair_results %>%
+    filter(comparison == "Caregiver PDS vs. youth PBIP") %>%
+    rename(pct_caregiver_pds_higher = pct_x_higher, pct_youth_pbip_higher = pct_y_higher),
+  page_length = 12
+)
+```
+
+# backward trajectories
+
+A **backward** transition is a decrease from a person's previous *observed* value on the same variable and
+reporter. Youth sequences include the interim visits (SOS, ACE1), ordered by age at the visit, so a
+youth sequence might run W2 → SOS → W3 → ACE1 → W4. Gaps are allowed, and `years_between` records the
+time between the two observations. Two variables are excluded: the relative-timing item (`pete`), which
+is not developmental, and the PBIP "next closest" drawings. A **large** drop is ≥ 2 points on an item or
+≥ 1 point on a summary score.
+
+Converted items aren't analyzed separately here. The conversion preserves order, so a raw item and its
+converted version go backward at exactly the same transitions; only the size of the drop differs.
+
+```{r transitions}
+traj_long <- bind_rows(
+  pds_long %>%
+    mutate(series = paste(reporter, "PDS")) %>%
+    select(tagid, cohort, visit, visit_type, visit_date, age, series, all_of(names(c(pds_items, pds_menarche, pds_scores)))) %>%
+    pivot_longer(all_of(names(c(pds_items, pds_menarche, pds_scores))), names_to = "var"),
+  pbip %>%
+    mutate(series = "Youth PBIP") %>%
+    select(tagid, cohort, visit, visit_type, visit_date, age, series, PBIP_1A, PBIP_2A, stage) %>%
+    pivot_longer(c(PBIP_1A, PBIP_2A, stage), names_to = "var")
+) %>%
+  filter(!is.na(value)) %>%
+  mutate(
+    series = factor(series, levels = series_levels),
+    var_type = ifelse(var %in% names(c(pds_scores, pbip_scores)), "Summary score", "Item"),
+    label = var_labels[var]
+  )
+
+cat("Observations with no age (ordered by visit date only):", sum(is.na(traj_long$age)), "\n")
+
+# consecutive observed values per person x series x variable, in chronological order
+make_transitions <- function(traj) {
+  traj %>%
+    arrange(tagid, series, var, age, visit_date) %>%
+    group_by(tagid, series, var) %>%
+    mutate(
+      prev_value = lag(value),
+      prev_visit = lag(visit),
+      prev_visit_type = lag(visit_type),
+      prev_age = lag(age),
+      next_value = lead(value)
+    ) %>%
+    ungroup() %>%
+    filter(!is.na(prev_value)) %>%
+    mutate(
+      change = value - prev_value,
+      backward = change < 0,
+      large_drop = ifelse(var_type == "Item", change <= -2, change <= -1),
+      years_between = age - prev_age,
+      transition = paste0(prev_visit, " -> ", visit),
+      involves_interim = visit_type == "interim" | prev_visit_type == "interim",
+      recovery = case_when(
+        !backward ~ NA_character_,
+        is.na(next_value) ~ "no later observation",
+        next_value >= prev_value ~ "returned to prior level",
+        next_value > value ~ "partial recovery",
+        TRUE ~ "stayed lower"
+      )
+    )
+}
+
+transitions <- make_transitions(traj_long)
+
+# core waves only: lets youth transitions line up with caregiver ones (no caregiver interim visits)
+transitions_core <- make_transitions(traj_long %>% filter(visit_type == "core"))
+```
+
+## how often
+
+*`pct_backward` is the share of consecutive observations where the value dropped, and `pct_large_drop` isolates drops too big to be a one-step slip.*
+
+```{r backward rates}
+backward_rates <- transitions %>%
+  group_by(series, var_type, var, label) %>%
+  summarise(
+    n_transitions = n(),
+    n_backward = sum(backward),
+    pct_backward = 100 * mean(backward),
+    pct_large_drop = 100 * mean(large_drop),
+    mean_drop = mean(change[backward]),
+    median_years_between = median(years_between, na.rm = TRUE),
+    pct_involving_interim = 100 * mean(involves_interim),
+    .groups = "drop"
+  ) %>%
+  arrange(var_type, var, series)
+
+show_table(backward_rates, page_length = 25)
+```
+
+Do transitions that touch an interim visit go backward more often? ACE1 was collected during the
+COVID-19 period (from 2020-04), so its administration may have differed from the in-lab sessions.
+
+*Compare `pct_backward` between the "core -> core" and "involves SOS/ACE1" columns; a higher rate for interim transitions suggests those visits were measured differently.*
+
+```{r backward by interim}
+transitions %>%
+  filter(series != "Caregiver PDS") %>%
+  mutate(transition_type = ifelse(involves_interim, "involves SOS/ACE1", "core -> core")) %>%
+  group_by(series, var_type, label, transition_type) %>%
+  summarise(n_transitions = n(), pct_backward = 100 * mean(backward), pct_large_drop = 100 * mean(large_drop), .groups = "drop") %>%
+  pivot_wider(names_from = transition_type, values_from = c(n_transitions, pct_backward, pct_large_drop)) %>%
+  arrange(var_type, label, series) %>%
+  show_table(digits = 1, page_length = 15)
+```
+
+*These are backward rates for transitions into or out of each interim visit separately, so you can see whether SOS or ACE1 drives any difference.*
+
+```{r backward by interim visit}
+transitions %>%
+  filter(involves_interim) %>%
+  mutate(interim = ifelse(visit_type == "interim", as.character(visit), as.character(prev_visit))) %>%
+  group_by(series, var_type, interim) %>%
+  summarise(n_transitions = n(), pct_backward = 100 * mean(backward), .groups = "drop") %>%
+  show_kable(digits = 1, caption = "Backward rate for transitions into or out of each interim visit (youth)")
+```
+
+*Taller bars mean the item goes backward more often (numbers on bars are counts), so comparing items within a source shows which questions are least stable.*
+
+```{r backward rates plot, fig.height=5.5}
+ggplot(
+  backward_rates %>%
+    mutate(label = factor(label, levels = unique(var_labels[c(names(pds_items), "fpete", "PBIP_1A", "PBIP_2A", names(pds_scores), "stage")]))),
+  aes(x = label, y = pct_backward, fill = series)) +
+  geom_col(position = position_dodge(width = 0.85, preserve = "single"), width = 0.8) +
+  geom_text(
+    aes(label = n_backward), position = position_dodge(width = 0.85, preserve = "single"),
+    vjust = -0.4, size = 3
+  ) +
+  facet_grid(. ~ var_type, scales = "free_x", space = "free_x") +
+  scale_fill_manual(values = pal_series) +
+  labs(
+    title = "% of consecutive-observation transitions that go backward",
+    subtitle = "Bar label = n backward transitions",
+    x = NULL, y = "% backward", fill = NULL
+  ) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+*Each point is the share of transitions ending at that visit that went backward, so spikes point to visits where reporting was less consistent.*
+
+```{r backward by transition, fig.height=4.5}
+transitions %>%
+  filter(var_type == "Summary score" | var %in% c("PBIP_1A", "PBIP_2A")) %>%
+  left_join(score_map %>% select(var, domain), by = "var") %>%
+  mutate(domain = factor(domain, levels = domain_levels)) %>%
+  group_by(series, domain, visit) %>%
+  summarise(n = n(), pct_backward = 100 * mean(backward), .groups = "drop") %>%
+  filter(n >= 10) %>%
+  ggplot(aes(x = visit, y = pct_backward, color = series, shape = series, linetype = series, group = series)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.3) +
+  facet_wrap(~domain, nrow = 1) +
+  scale_color_manual(values = pal_series) +
+  scale_shape_manual(values = shape_series) +
+  scale_linetype_manual(values = linetype_series) +
+  labs(
+    title = "Backward transitions in summary scores by ending visit",
+    subtitle = "Ending visits with ≥ 10 transitions",
+    x = "Visit (transition ending here)", y = "% backward", color = NULL, shape = NULL, linetype = NULL
+  )
+```
+
+## who
+
+Participant-level prevalence is computed among people with ≥ 2 observations on that variable.
+
+*`pct_ever_backward` is the share of participants with at least one drop on that variable, and "any item" combines all items.*
+
+```{r participant prevalence}
+person_backward <- transitions %>%
+  group_by(tagid, cohort, series, var_type, var, label) %>%
+  summarise(
+    n_transitions = n(),
+    n_backward = sum(backward),
+    ever_backward = any(backward),
+    ever_large_drop = any(large_drop),
+    .groups = "drop"
+  )
+
+# any PDS/PBIP item going backward, per series
+person_any_item <- transitions %>%
+  filter(var_type == "Item") %>%
+  group_by(tagid, cohort, series) %>%
+  summarise(ever_backward = any(backward), ever_large_drop = any(large_drop), .groups = "drop") %>%
+  mutate(var_type = "Item", var = "any_item", label = "any item")
+
+bind_rows(person_backward, person_any_item) %>%
+  group_by(series, var_type, var, label) %>%
+  summarise(
+    n_participants = n(),
+    pct_ever_backward = 100 * mean(ever_backward),
+    pct_ever_large_drop = 100 * mean(ever_large_drop),
+    .groups = "drop"
+  ) %>%
+  arrange(var_type, var, series) %>%
+  show_table(page_length = 25)
+```
+
+How participants who ever go backward on a **total** score compare with those who don't:
+
+*If participants who go backward differ from the rest in starting age or score, the reversals may be systematic rather than random (people with more observations have more chances to go backward).*
+
+```{r backward characteristics}
+first_obs <- traj_long %>%
+  filter(var %in% c("pdss", "stage")) %>%
+  group_by(tagid, series) %>%
+  slice_min(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(tagid, series, first_visit = visit, first_age = age, first_score = value)
+
+n_obs <- traj_long %>%
+  filter(var %in% c("pdss", "stage")) %>%
+  count(tagid, series, name = "n_observations")
+
+person_backward %>%
+  filter(var %in% c("pdss", "stage")) %>%
+  left_join(first_obs, by = c("tagid", "series")) %>%
+  left_join(n_obs, by = c("tagid", "series")) %>%
+  group_by(series, ever_backward) %>%
+  summarise(
+    n = n(),
+    pct_tag2 = 100 * mean(cohort == "TAG2"),
+    mean_n_observations = mean(n_observations),
+    mean_first_age = mean(first_age, na.rm = TRUE),
+    mean_first_score = mean(first_score),
+    .groups = "drop"
+  ) %>%
+  show_kable(caption = "Ever backward on the total score (PDSS or PBIP stage) vs. not")
+```
+
+## what happens next
+
+After a backward transition, the next observed value either returns to the prior level, partially
+recovers, stays lower, or is not yet observed. Mostly transient drops look like reporting noise;
+persistent ones are harder to explain that way.
+
+*This table counts what happened at the next observation after each backward transition.*
+
+```{r recovery}
+recovery_tab <- transitions %>%
+  filter(backward) %>%
+  count(series, var_type, label, recovery) %>%
+  group_by(series, var_type, label) %>%
+  mutate(pct = 100 * n / sum(n)) %>%
+  ungroup()
+
+show_table(recovery_tab, page_length = 15)
+```
+
+*A large "returned to prior level" share means most drops are temporary, consistent with reporting noise, while a large "stayed lower" share would be harder to explain.*
+
+```{r recovery plot, fig.height=5}
+recovery_tab %>%
+  filter(var_type == "Summary score") %>%
+  mutate(recovery = factor(recovery, levels = c("returned to prior level", "partial recovery", "stayed lower", "no later observation"))) %>%
+  ggplot(aes(x = series, y = n, fill = recovery)) +
+  geom_col(position = "fill", width = 0.75) +
+  facet_wrap(~label, nrow = 1, scales = "free_x") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c(unname(sunset_anchors[c("slate", "honey", "brick")]), "grey75")) +
+  labs(title = "What follows a backward transition (summary scores)", x = NULL, y = "% of backward transitions", fill = NULL) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+  guides(fill = guide_legend(nrow = 2))
+```
+
+## co-occurrence
+
+The next table asks whether a backward transition in one source shows up at the same transition (same
+start and end visits) in another source. If drops were mostly random reporting error, P(B backward | A
+backward) would sit close to P(B backward | A not backward). Comparisons involving caregivers use
+core-wave sequences (W2 → W3, not W2 → SOS → W3) so that youth and caregiver transitions line up.
+Youth PDS vs. PBIP uses the full sequences, interim visits included.
+
+*Compare `pct_b_given_a` with `pct_b_given_not_a`: if the first is much larger, drops in one source tend to happen at the same time as drops in the other.*
+
+```{r co-occurrence}
+domain_transitions <- function(tr) {
+  tr %>%
+    inner_join(score_map %>% select(var, domain), by = "var") %>%
+    select(tagid, prev_visit, visit, domain, series, backward)
+}
+
+cooccur <- function(a, b, tr) {
+  domain_transitions(tr) %>%
+    filter(series %in% c(a, b)) %>%
+    pivot_wider(
+      id_cols = c(tagid, prev_visit, visit, domain),
+      names_from = series,
+      values_from = backward
+    ) %>%
+    filter(!is.na(.data[[a]]), !is.na(.data[[b]])) %>%
+    group_by(domain) %>%
+    summarise(
+      n_shared_transitions = n(),
+      pct_a_backward = 100 * mean(.data[[a]]),
+      pct_b_backward = 100 * mean(.data[[b]]),
+      pct_b_given_a = 100 * mean(.data[[b]][.data[[a]]]),
+      pct_b_given_not_a = 100 * mean(.data[[b]][!.data[[a]]]),
+      .groups = "drop"
+    ) %>%
+    mutate(a = a, b = b, .before = 1)
+}
+
+bind_rows(
+  cooccur("Youth PDS", "Caregiver PDS", transitions_core) %>% mutate(visits = "core only"),
+  cooccur("Youth PDS", "Youth PBIP", transitions) %>% mutate(visits = "core + interim"),
+  cooccur("Caregiver PDS", "Youth PBIP", transitions_core) %>% mutate(visits = "core only")
+) %>%
+  mutate(domain = factor(domain, levels = domain_levels)) %>%
+  arrange(a, b, domain) %>%
+  show_kable(caption = "Co-occurrence of backward transitions across sources (A -> B)")
+```
+
+## examples
+
+The panels show a random sample of participants whose youth PDSS goes backward at least once, with all
+three total-score series overlaid.
+
+*Each panel is one participant: dips in the solid line are backward youth PDSS transitions, and faded points are interim visits.*
+
+```{r example trajectories, fig.height=8}
+example_ids <- person_backward %>%
+  filter(series == "Youth PDS", var == "pdss", ever_backward) %>%
+  pull(tagid) %>%
+  unique()
+example_ids <- sample(example_ids, min(12, length(example_ids)))
+
+scores_long %>%
+  filter(tagid %in% example_ids, domain == "Total") %>%
+  ggplot(aes(x = age, y = value, color = series, shape = series, linetype = series)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(alpha = visit_type), size = 2) +
+  facet_wrap(~tagid, ncol = 4) +
+  scale_color_manual(values = pal_series) +
+  scale_shape_manual(values = shape_series) +
+  scale_linetype_manual(values = linetype_series) +
+  scale_alpha_manual(values = c(core = 1, interim = 0.45)) +
+  coord_cartesian(ylim = c(1, 5)) +
+  labs(
+    title = "Example participants with a backward youth PDSS transition",
+    subtitle = "Faded points = interim visits (SOS, ACE1)",
+    x = "Age (years)", y = "Total score", color = NULL, shape = NULL, linetype = NULL, alpha = NULL
+  )
+```
+
+## menarche reversals
+
+Menarche going from "yes" to "no" is not biologically possible, so every case appears below.
+
+*Each row is a participant who reported menarche at one visit and not at a later one, and `next_value` shows whether they reported it again afterward.*
+
+```{r menarche reversals}
+menarche_rev <- transitions %>%
+  filter(var == "fpete", backward) %>%
+  select(tagid, cohort, series, transition, prev_age, age, prev_value, value, next_value)
+
+if (nrow(menarche_rev) > 0) {
+  show_table(menarche_rev)
+} else {
+  cat("No menarche reversals.\n")
+}
+```
+
+## ID list for sensitivity analyses
+
+This is one row per participant, flagging any backward or large-drop transition on the total and domain
+scores for each source. It replaces the `regressing_ids` chunk in `timing_tempo.Rmd` (which flagged PBIP
+`stage` only). Use the CSV button to export it.
+
+*Each column counts a participant's backward transitions on one source × score; filter `any_backward` to TRUE to see who a sensitivity analysis would exclude.*
+
+```{r id flags}
+id_flags <- transitions %>%
+  filter(var_type == "Summary score" | var %in% c("PBIP_1A", "PBIP_2A")) %>%
+  mutate(key = paste(gsub(" ", "_", series), var, sep = "__")) %>%
+  group_by(tagid, cohort, key) %>%
+  summarise(n_backward = sum(backward), .groups = "drop") %>%
+  pivot_wider(names_from = key, values_from = n_backward) %>%
+  mutate(any_backward = rowSums(across(-c(tagid, cohort)), na.rm = TRUE) > 0, .after = cohort) %>%
+  arrange(desc(any_backward), tagid)
+
+cat(sum(id_flags$any_backward), "of", nrow(id_flags), "participants have >= 1 backward transition on a summary/domain score.\n")
+
+DT::datatable(
+  id_flags,
+  rownames = FALSE,
+  filter = "top",
+  extensions = "Buttons",
+  options = list(pageLength = 10, scrollX = TRUE, dom = "Bfrtip", buttons = c("csv", "copy"))
+)
+```
+
+# missing data patterns
+
+A wave counts as **eligible** for a cohort if anyone in that cohort has data at that wave. Waves a cohort
+hasn't reached yet (e.g., later waves for TAG2) count as **not yet collected**, not missing. A source is
+observed at a wave when its survey exists for that participant, whatever the item-level missingness.
+This grid covers core waves only. Interim visits were sub-studies that not everyone was invited to, so
+they're summarized separately below rather than counted as missing.
+
+*This is the latest wave each cohort has reached; waves after it count as "not yet collected," not missing.*
+
+```{r eligibility grid}
+roster <- sources %>% distinct(tagid, cohort)
+sources_core <- sources %>% filter(visit_type == "core")
+
+cohort_max_wave <- sources_core %>%
+  group_by(cohort) %>%
+  summarise(max_wave = max(as.integer(wave)), .groups = "drop")
+
+grid <- roster %>%
+  crossing(source = factor(series_levels, levels = series_levels), wave_num = as.integer(waves)) %>%
+  left_join(cohort_max_wave, by = "cohort") %>%
+  left_join(
+    sources_core %>% mutate(wave_num = as.integer(wave), observed = TRUE) %>% select(tagid, source, wave_num, observed),
+    by = c("tagid", "source", "wave_num")
+  ) %>%
+  mutate(
+    observed = coalesce(observed, FALSE),
+    eligible = wave_num <= max_wave
+  )
+
+show_kable(cohort_max_wave, caption = "Latest wave with any data, by cohort")
+```
+
+*`pct_observed` is the share of eligible participants who completed each source at each wave.*
+
+```{r eligibility by wave}
+grid %>%
+  filter(eligible) %>%
+  group_by(cohort, source, wave_num) %>%
+  summarise(n_eligible = n(), n_observed = sum(observed), pct_observed = 100 * mean(observed), .groups = "drop") %>%
+  show_table(page_length = 15)
+```
+
+*Each row is a participant and each column a wave: grey cells are missed waves, and long grey runs at the right are dropout.*
+
+```{r missing tile plot, fig.height=11}
+tile_status <- grid %>%
+  mutate(reporter = ifelse(source == "Caregiver PDS", "caregiver", "youth")) %>%
+  group_by(tagid, cohort, wave_num, eligible) %>%
+  summarise(
+    youth = any(observed & reporter == "youth"),
+    caregiver = any(observed & reporter == "caregiver"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    status = case_when(
+      !eligible ~ "not yet collected",
+      youth & caregiver ~ "youth + caregiver",
+      youth ~ "youth only",
+      caregiver ~ "caregiver only",
+      TRUE ~ "missing"
+    ),
+    status = factor(status, levels = c("youth + caregiver", "youth only", "caregiver only", "missing", "not yet collected"))
+  )
+
+id_order <- tile_status %>%
+  group_by(tagid) %>%
+  summarise(n_obs = sum(youth | caregiver), first = min(wave_num[youth | caregiver]), .groups = "drop") %>%
+  arrange(desc(n_obs), first) %>%
+  pull(tagid)
+
+ggplot(tile_status, aes(x = factor(wave_num), y = factor(tagid, levels = rev(id_order)), fill = status)) +
+  geom_tile(color = "white", linewidth = 0.2) +
+  facet_grid(cohort ~ ., scales = "free_y", space = "free_y") +
+  scale_fill_manual(values = c(
+    "youth + caregiver" = "#335C67", "youth only" = "#E09F3E", "caregiver only" = "#9E2A2B",
+    "missing" = "grey85", "not yet collected" = "white"
+  )) +
+  labs(title = "Data availability by participant and wave", subtitle = "Youth = PDS or PBIP", x = "Wave", y = "Participant", fill = NULL) +
+  theme(axis.text.y = element_blank(), panel.grid = element_blank())
+```
+
+## participation patterns
+
+Each pattern string runs across eligible waves (`X` = observed, `.` = missing).
+
+*This is the share of participants with each missingness type; a high "monotone dropout" share means most missingness comes from people leaving the study.*
+
+```{r patterns}
+person_patterns <- grid %>%
+  filter(eligible) %>%
+  arrange(tagid, source, wave_num) %>%
+  group_by(tagid, cohort, source) %>%
+  summarise(
+    pattern = paste(ifelse(observed, "X", "."), collapse = ""),
+    n_observed = sum(observed),
+    n_eligible = n(),
+    first = suppressWarnings(min(which(observed))),
+    last = suppressWarnings(max(which(observed))),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    gaps = n_observed > 0 & (last - first + 1) > n_observed,
+    type = case_when(
+      n_observed == 0 ~ "never observed",
+      n_observed == n_eligible ~ "complete",
+      gaps ~ "intermittent",
+      first > 1 & last < n_eligible ~ "late entry + dropout",
+      first > 1 ~ "late entry",
+      TRUE ~ "monotone dropout"
+    )
+  )
+
+person_patterns %>%
+  count(cohort, source, type) %>%
+  group_by(cohort, source) %>%
+  mutate(pct = 100 * n / sum(n)) %>%
+  ungroup() %>%
+  select(-n) %>%
+  pivot_wider(names_from = type, values_from = pct, values_fill = 0) %>%
+  show_kable(digits = 1, caption = "Missingness type (% of participants)")
+```
+
+*These are the exact participation strings, most common first.*
+
+```{r pattern strings}
+person_patterns %>%
+  count(cohort, source, pattern, name = "n_participants") %>%
+  group_by(cohort, source) %>%
+  mutate(pct = 100 * n_participants / sum(n_participants)) %>%
+  arrange(cohort, source, desc(n_participants)) %>%
+  ungroup() %>%
+  show_table(page_length = 15)
+```
+
+## interim visit participation
+
+*This is the number (and share of the roster) of participants who completed each interim visit.*
+
+```{r interim participation, eval = length(params$interim_visits) > 0}
+sources %>%
+  filter(visit_type == "interim") %>%
+  count(cohort, visit, source, name = "n_participants") %>%
+  left_join(roster %>% count(cohort, name = "n_roster"), by = "cohort") %>%
+  mutate(pct_of_roster = 100 * n_participants / n_roster) %>%
+  show_kable(digits = 1, caption = "Interim visit participation (youth only)")
+```
+
+*This shows where each interim visit fell in a participant's sequence; for example, "W3 -> ACE1 -> W4" means ACE1 came between W3 and W4.*
+
+```{r interim position, eval = length(params$interim_visits) > 0}
+# where each interim visit falls in a participant's sequence of visits
+visit_info %>%
+  filter(!is.na(age)) %>%
+  arrange(tagid, age) %>%
+  group_by(tagid) %>%
+  mutate(
+    prev_visit = lag(visit_labels[wave], default = "start"),
+    next_visit = lead(visit_labels[wave], default = "end")
+  ) %>%
+  ungroup() %>%
+  filter(wave %in% interim_visits) %>%
+  count(visit = visit_labels[wave], position = paste(prev_visit, "->", visit_labels[wave], "->", next_visit), name = "n") %>%
+  arrange(visit, desc(n)) %>%
+  show_table(page_length = 15)
+```
+
+## item-level missingness within completed surveys
+
+*Only items with any missing responses are listed; low percentages mean most missingness comes from whole missed visits rather than skipped items.*
+
+```{r item missingness}
+bind_rows(
+  pds_long %>%
+    mutate(source = paste(reporter, "PDS")) %>%
+    select(source, wave_num, all_of(pds_cols)) %>%
+    pivot_longer(all_of(pds_cols), names_to = "var"),
+  pbip %>%
+    mutate(source = "Youth PBIP") %>%
+    select(source, wave_num, all_of(names(pbip_items)), stage) %>%
+    pivot_longer(c(all_of(names(pbip_items)), stage), names_to = "var")
+) %>%
+  group_by(source, var) %>%
+  summarise(n_surveys = n(), n_missing = sum(is.na(value)), pct_missing = 100 * mean(is.na(value)), .groups = "drop") %>%
+  mutate(label = var_labels[var], .after = var) %>%
+  filter(n_missing > 0) %>%
+  arrange(desc(pct_missing)) %>%
+  show_kable(caption = "Items with any missingness among completed surveys (after out-of-range recoding)")
+```
+
+## is missingness related to puberty?
+
+These checks are descriptive, not formal tests of MAR.
+
+**Attrition.** Is first-wave youth PDSS (and age) different for participants who are observed at their
+cohort's latest eligible wave vs. those who aren't?
+
+*If retained and not-retained participants have similar wave 1 PDSS and age, attrition is unlikely to be related to pubertal status.*
+
+```{r attrition vs puberty}
+baseline <- pds_long %>%
+  filter(reporter == "Youth", wave_num == min(as.integer(waves))) %>%
+  select(tagid, cohort, w1_pdss = pdss, w1_age = age)
+
+retained <- grid %>%
+  filter(source == "Youth PDS", wave_num == max_wave) %>%
+  select(tagid, retained_at_latest = observed)
+
+baseline %>%
+  left_join(retained, by = "tagid") %>%
+  group_by(cohort, retained_at_latest) %>%
+  summarise(
+    n = n(),
+    mean_w1_pdss = mean(w1_pdss, na.rm = TRUE),
+    sd_w1_pdss = sd(w1_pdss, na.rm = TRUE),
+    mean_w1_age = mean(w1_age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  show_kable(caption = "Wave 1 youth PDSS and age by retention at the cohort's latest wave")
+```
+
+**Caregiver nonresponse.** When the youth completed the PDS, does youth PDSS differ by whether the
+caregiver also responded?
+
+*If youth PDSS is similar whether or not the caregiver responded, caregiver nonresponse is unlikely to be related to pubertal status.*
+
+```{r caregiver missing vs youth}
+scores_wide %>%
+  filter(visit_type == "core", !is.na(pdss_Youth)) %>%
+  mutate(caregiver_reported = !is.na(pdss_Caregiver)) %>%
+  group_by(wave_num, caregiver_reported) %>%
+  summarise(n = n(), mean_youth_pdss = mean(pdss_Youth), mean_age = mean(age, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = caregiver_reported, values_from = c(n, mean_youth_pdss, mean_age), names_glue = "{.value}_cg_{ifelse(caregiver_reported, 'yes', 'no')}") %>%
+  show_kable(caption = "Youth PDSS by caregiver response, per wave")
+```
+
+# session info
+
+```{r session info}
+sessionInfo()
+```
